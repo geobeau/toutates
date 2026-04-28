@@ -44,6 +44,8 @@ struct LocalModelMetrics {
     model_proxy_aquired: LocalHistogram,
     serialization_done: LocalHistogram,
     inference_in_queue: LocalHistogram,
+    inference_exec_start: LocalHistogram,
+    inference_exec_end: LocalHistogram,
     output_processed: LocalHistogram,
 }
 
@@ -101,6 +103,14 @@ impl LocalMetrics {
                         .local(),
                     inference_in_queue: r
                         .inference_requests_inference_in_queue
+                        .with_label_values(&[model])
+                        .local(),
+                    inference_exec_start: r
+                        .inference_requests_inference_exec_start
+                        .with_label_values(&[model])
+                        .local(),
+                    inference_exec_end: r
+                        .inference_requests_inference_exec_end
                         .with_label_values(&[model])
                         .local(),
                     output_processed: r
@@ -167,6 +177,20 @@ impl LocalMetrics {
             .observe(duration);
     }
 
+    pub fn observe_inference_exec_start(&self, model: &str, duration: f64) {
+        self.ensure_model(model);
+        self.per_model.borrow()[model]
+            .inference_exec_start
+            .observe(duration);
+    }
+
+    pub fn observe_inference_exec_end(&self, model: &str, duration: f64) {
+        self.ensure_model(model);
+        self.per_model.borrow()[model]
+            .inference_exec_end
+            .observe(duration);
+    }
+
     pub fn observe_output_processed(&self, model: &str, duration: f64) {
         self.ensure_model(model);
         self.per_model.borrow()[model]
@@ -185,6 +209,8 @@ impl LocalMetrics {
             m.model_proxy_aquired.flush();
             m.serialization_done.flush();
             m.inference_in_queue.flush();
+            m.inference_exec_start.flush();
+            m.inference_exec_end.flush();
             m.output_processed.flush();
         }
     }

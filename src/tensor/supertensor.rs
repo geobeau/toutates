@@ -1,13 +1,12 @@
 use atomic_refcell::AtomicRefCell;
 use std::{
-    cell::{OnceCell, UnsafeCell},
+    cell::{OnceCell, RefCell, UnsafeCell},
     cmp::min,
     collections::HashMap,
     sync::{
-        atomic::{fence, AtomicUsize, Ordering},
-        Arc,
+        Arc, atomic::{AtomicUsize, Ordering, fence}
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use compio::runtime::time::sleep_until;
@@ -17,8 +16,7 @@ use ort::{
     value::{Outlet, Shape, TensorElementType, Value},
 };
 use smallvec::SmallVec;
-use std::time::Instant;
-use tokio::sync::Notify;
+use tokio::{sync::Notify};
 use tracing::info;
 
 use crate::{
@@ -52,11 +50,19 @@ pub struct SuperTensorMetricsSnapshot {
     pub executors_in_use: usize,
 }
 
+/// Hold the timers to track where time is lost
+pub struct ExecutionTrace {
+    pub queue_start: OnceCell<Instant>,
+    pub exec_start: OnceCell<Instant>,
+    pub exec_end: OnceCell<Instant>,
+}
+
 struct BatchState {
     deadline: OnceCell<Instant>,
     output: Arc<OnceCell<Result<SessionValues, usize>>>,
     executor_notifier: Arc<Notify>,
     response_ready_notifier: Arc<Notify>,
+    execution_trace: Arc<ExecutionTrace>
 }
 
 impl BatchState {
@@ -66,6 +72,7 @@ impl BatchState {
             output: Arc::new(OnceCell::new()),
             executor_notifier: Arc::new(Notify::new()),
             response_ready_notifier: Arc::new(Notify::new()),
+            execution_trace: Arc::new(ExecutionTrace { queue_start: OnceCell::new(), exec_start: OnceCell::new(), exec_end: OnceCell::new() })
         }
     }
 }
@@ -97,18 +104,19 @@ impl InferenceResponse {
         self.outputs.push(reservation);
     }
 
-    pub async fn get_data(self, data: &mut Vec<Vec<u8>>) -> Vec<(TensorElementType, Shape)> {
-        let mut maybe_metadatas: Option<Vec<(TensorElementType, Shape)>> = None;
+    pub async fn get_data(self, data: &mut Vec<Vec<u8>>) -> (Vec<(TensorElementType, Shape)>, Arc<ExecutionTrace>) {
+        let mut maybe_metadatas: Option<(Vec<(TensorElementType, Shape)>, Arc<ExecutionTrace>)> = None;
         for output in self.outputs.into_iter() {
             let batch_metadatas = output.get_result(data).await;
             match &mut maybe_metadatas {
                 Some(metadatas) => {
                     batch_metadatas
+                    .0
                         .iter()
                         .enumerate()
                         .for_each(|(i, (_, shape))| {
                             // Add the shape of all subbatches to the response shape
-                            metadatas[i].1[0] += shape[0]
+                            metadatas.0[i].1[0] += shape[0]
                         });
                 }
                 None => maybe_metadatas = Some(batch_metadatas),
@@ -121,6 +129,7 @@ impl InferenceResponse {
 // Ensure accounting when tasks are canceled
 pub struct WriteReservation {
     output: Arc<OnceCell<Result<SessionValues, usize>>>,
+    trace: Arc<ExecutionTrace>,
     response_ready_notifier: Arc<Notify>,
     start: usize,
     end: usize,
@@ -130,6 +139,7 @@ impl WriteReservation {
     fn new(tracker: &DataTracker, start: usize, end: usize) -> WriteReservation {
         let state = tracker.state.borrow();
         let output = state.output.clone();
+        let trace = state.execution_trace.clone();
         let response_ready_notifier = state.response_ready_notifier.clone();
         drop(state);
         tracker
@@ -139,11 +149,12 @@ impl WriteReservation {
             start,
             end,
             output,
+            trace,
             response_ready_notifier,
         }
     }
 
-    async fn get_result(self, data: &mut Vec<Vec<u8>>) -> Vec<(TensorElementType, Shape)> {
+    async fn get_result(self, data: &mut Vec<Vec<u8>>) -> (Vec<(TensorElementType, Shape)>, Arc<ExecutionTrace>) {
         loop {
             let notified = self.response_ready_notifier.notified();
             if let Some(result) = self.output.get() {
@@ -171,7 +182,7 @@ impl WriteReservation {
                     }
                     Err(_) => todo!(),
                 }
-                return metadatas;
+                return (metadatas, self.trace.clone());
             }
             notified.await;
         }
@@ -505,10 +516,13 @@ impl SuperTensorBuffer {
             });
         if batch_slot == 0 {
             let tracker = self.trackers.get(idx.as_batch_id()).unwrap();
-            let deadline = Instant::now() + Duration::from_millis(2);
+            let now = Instant::now();
+            let deadline = now + Duration::from_millis(2);
             tracker.dirty.store(1, Ordering::Relaxed);
             // println!("{}> writing deadline", idx.as_batch_id());
-            let _ = tracker.state.borrow().deadline.set(deadline);
+            let state_borrow = tracker.state.borrow();
+            state_borrow.deadline.set(deadline).unwrap();
+            state_borrow.execution_trace.queue_start.set(now).unwrap();
         }
         fence(Ordering::Release);
 
@@ -567,7 +581,7 @@ impl SuperTensorBuffer {
         if dist_to_higher > 0 && dist_to_higher < HALF_RANGE {
             let maybe_deadline = tracker.state.borrow().deadline.get().copied();
             if let Some(deadline) = maybe_deadline {
-                let _now = Instant::now();
+                // let _now = Instant::now();
                 tokio::select! {
                     _ = sleep_until(deadline) => {
                         // println!("awaken by sleep after {:?}", now.elapsed())
@@ -578,6 +592,7 @@ impl SuperTensorBuffer {
         }
 
         self.seal_current_batch(tracker, &current_executor_idx);
+        tracker.state.borrow().execution_trace.exec_start.set(Instant::now()).unwrap();
         let batch_items = tracker.written_slots.load(Ordering::Acquire);
         let _executors_in_use_guard = ExecutorsInUseGuard::new(&self.executors_in_use);
         self.execute_current_batch(f, tracker, &current_executor_idx)
@@ -633,7 +648,11 @@ impl SuperTensorBuffer {
         let result = f(&input).await;
         // Put the results in the arc output, to be dispatched to consumers
         let state = tracker.state.borrow();
-        let _ = state.output.set(Ok(result));
+        state.execution_trace.exec_end.set(Instant::now()).unwrap();
+        let cell_status = state.output.set(Ok(result));
+        if cell_status.is_err() {
+            panic!("Failed to set cell for the output of inference")
+        }
         let notifier = state.response_ready_notifier.clone();
         drop(state);
         notifier.notify_waiters();

@@ -18,6 +18,8 @@ pub struct MetricsRegistry {
     pub inference_requests_model_proxy_aquired: HistogramVec,
     pub inference_requests_serialization_done: HistogramVec,
     pub inference_requests_inference_in_queue: HistogramVec,
+    pub inference_requests_inference_exec_start: HistogramVec,
+    pub inference_requests_inference_exec_end: HistogramVec,
     pub inference_requests_output_processed: HistogramVec,
 
     pub inference_queue_depth: IntGauge,
@@ -159,10 +161,34 @@ impl MetricsRegistry {
             .register(Box::new(inference_requests_inference_in_queue.clone()))
             .unwrap();
 
+        let inference_requests_inference_exec_start = HistogramVec::new(
+            make_histogram_opts(
+                "inference_exec_start_seconds",
+                "STEP 4: How long request was queued",
+            ),
+            &["model"],
+        )
+        .unwrap();
+        registry
+            .register(Box::new(inference_requests_inference_exec_start.clone()))
+            .unwrap();
+
+        let inference_requests_inference_exec_end = HistogramVec::new(
+            make_histogram_opts(
+                "inference_exec_end_seconds",
+                "STEP 5: How long request was executed",
+            ),
+            &["model"],
+        )
+        .unwrap();
+        registry
+            .register(Box::new(inference_requests_inference_exec_end.clone()))
+            .unwrap();
+
         let inference_requests_output_processed = HistogramVec::new(
             make_histogram_opts(
                 "inference_output_processed_seconds",
-                "STEP 4: How long it took to get output data and to copy them on the response buffer",
+                "STEP 6: how long after execution it was processed by the response thread",
             ),
             &["model"],
         )
@@ -256,6 +282,8 @@ impl MetricsRegistry {
             inference_requests_model_proxy_aquired,
             inference_requests_serialization_done,
             inference_requests_inference_in_queue,
+            inference_requests_inference_exec_start,
+            inference_requests_inference_exec_end,
             inference_requests_output_processed,
             inference_queue_depth,
             inference_executors_in_use,

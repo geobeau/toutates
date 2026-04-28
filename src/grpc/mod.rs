@@ -194,7 +194,7 @@ impl GrpcInferenceService for TritonService {
         let mut raw_output: Vec<Vec<u8>> = Vec::new();
 
         let output_metadata = inference_outputs.get_data(&mut raw_output).await;
-        let outputs = output_metadata
+        let outputs = output_metadata.0
             .iter()
             .zip(proxy.model_metadata.output_meta.iter())
             .map(|((data_type, shape), meta)| InferOutputTensor {
@@ -205,6 +205,7 @@ impl GrpcInferenceService for TritonService {
                 contents: None,
             })
             .collect();
+        trace.record_execution_trace(output_metadata.1);
         trace.record_output_processed();
 
         with_local_metrics(|m| {

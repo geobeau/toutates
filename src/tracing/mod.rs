@@ -1,18 +1,21 @@
 use std::cell::RefCell;
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use tokio::time::Instant;
 
 use tracing::debug;
 
 use crate::metrics::LocalMetrics;
+use crate::tensor::supertensor::ExecutionTrace;
 
 pub struct ClientTrace {
     pub start: Instant,
-    model_proxy_aquired: Option<Duration>,
-    serialization_done: Option<Duration>,
-    inference_in_queue: Option<Duration>,
-    output_processed: Option<Duration>,
+    model_proxy_aquired: Option<Instant>,
+    serialization_done: Option<Instant>,
+    inference_in_queue: Option<Instant>,
+    inference_exec_start: Option<Instant>,
+    inference_exec_end: Option<Instant>,
+    output_processed: Option<Instant>,
 }
 
 impl ClientTrace {
@@ -22,34 +25,44 @@ impl ClientTrace {
             model_proxy_aquired: None,
             serialization_done: None,
             inference_in_queue: None,
+            inference_exec_start: None,
+            inference_exec_end: None,
             output_processed: None,
         }
     }
 
     pub fn record_model_proxy_aquired(&mut self) {
-        self.model_proxy_aquired = Some(self.start.elapsed())
+        self.model_proxy_aquired = Some(Instant::now())
     }
     pub fn record_serialization_done(&mut self) {
-        self.serialization_done = Some(self.start.elapsed())
+        self.serialization_done = Some(Instant::now())
     }
     pub fn record_inference_in_queue(&mut self) {
-        self.inference_in_queue = Some(self.start.elapsed())
+        self.inference_in_queue = Some(Instant::now())
+    }
+    pub fn record_execution_trace(&mut self, exec_trace: Arc<ExecutionTrace>) {
+        self.inference_exec_start = Some(*exec_trace.exec_start.get().unwrap());
+        self.inference_exec_end = Some(*exec_trace.exec_end.get().unwrap());
     }
     pub fn record_output_processed(&mut self) {
-        self.output_processed = Some(self.start.elapsed())
+        self.output_processed = Some(Instant::now())
     }
 
     pub fn record_metrics(&self, model_name: &str, local_metrics: &LocalMetrics) {
         local_metrics.observe_model_proxy_aquired(
             model_name,
-            self.model_proxy_aquired.unwrap().as_secs_f64(),
+            (self.model_proxy_aquired.unwrap() - self.start).as_secs_f64(),
         );
         local_metrics
-            .observe_serialization_done(model_name, self.serialization_done.unwrap().as_secs_f64());
+            .observe_serialization_done(model_name, (self.serialization_done.unwrap() - self.model_proxy_aquired.unwrap()).as_secs_f64());
         local_metrics
-            .observe_inference_in_queue(model_name, self.inference_in_queue.unwrap().as_secs_f64());
+            .observe_inference_in_queue(model_name, (self.inference_in_queue.unwrap()  - self.serialization_done.unwrap()).as_secs_f64());
         local_metrics
-            .observe_output_processed(model_name, self.output_processed.unwrap().as_secs_f64());
+            .observe_inference_exec_start(model_name, (self.inference_exec_start.unwrap()  - self.inference_in_queue.unwrap()).as_secs_f64());
+        local_metrics
+            .observe_inference_exec_end(model_name, (self.inference_exec_end.unwrap() - self.inference_exec_start.unwrap()).as_secs_f64());
+        local_metrics
+            .observe_output_processed(model_name, (self.output_processed.unwrap() - self.inference_exec_end.unwrap()).as_secs_f64());
     }
 
     pub fn print_debug(&self) {
