@@ -323,6 +323,9 @@ impl BatchableTensor {
         let mut batch_shape = shape.clone();
         let mut single_tensor_shape = shape.clone();
         batch_shape[0] = batch_size as i64;
+        let all_shape_static = batch_shape.iter().all(|dim| *dim >= 0);
+        assert!(all_shape_static, "Batch shape contains a dimension that is dynamic and not the batching dimension {batch_shape:?}");
+        println!("Shape {:?}", batch_shape);
         single_tensor_shape[0] = 1;
         BatchableTensor {
             inner_tensor: DynTensor::new(allocator, data_type, batch_shape).unwrap(),
