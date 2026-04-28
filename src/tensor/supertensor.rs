@@ -1,4 +1,3 @@
-use atomic_refcell::AtomicRefCell;
 use std::{
     cell::{OnceCell, RefCell, UnsafeCell},
     cmp::min,
@@ -81,7 +80,21 @@ struct DataTracker {
     // Dirty buffer should not be reused
     dirty: AtomicUsize,
     written_slots: AtomicUsize,
-    state: AtomicRefCell<BatchState>,
+    state: UnsafeCell<BatchState>,
+}
+
+impl DataTracker {
+    /// # Safety
+    /// The caller is responsible for ensuring no race conditions on the borrowed state.
+    unsafe fn unsafe_borrow(&self) -> &BatchState {
+        &*self.state.get()
+    }
+
+    /// # Safety
+    /// The caller is responsible for ensuring no race conditions on the borrowed state.
+    unsafe fn unsafe_borrow_mut(&self) -> &mut BatchState {
+        &mut *self.state.get()
+    }
 }
 
 pub struct SessionValues {
@@ -137,11 +150,10 @@ pub struct WriteReservation {
 
 impl WriteReservation {
     fn new(tracker: &DataTracker, start: usize, end: usize) -> WriteReservation {
-        let state = tracker.state.borrow();
+        let state = unsafe { tracker.unsafe_borrow() };
         let output = state.output.clone();
         let trace = state.execution_trace.clone();
         let response_ready_notifier = state.response_ready_notifier.clone();
-        drop(state);
         tracker
             .written_slots
             .fetch_add(end - start, Ordering::Release);
@@ -372,7 +384,7 @@ impl SuperTensorBuffer {
                 trackers.push(DataTracker {
                     dirty: AtomicUsize::new(0),
                     written_slots: AtomicUsize::new(0),
-                    state: AtomicRefCell::new(BatchState::new()),
+                    state: UnsafeCell::new(BatchState::new()),
                 });
             }
             let ring_mask = (capacity * batch_size) - 1;
@@ -520,7 +532,7 @@ impl SuperTensorBuffer {
             let deadline = now + Duration::from_millis(2);
             tracker.dirty.store(1, Ordering::Relaxed);
             // println!("{}> writing deadline", idx.as_batch_id());
-            let state_borrow = tracker.state.borrow();
+            let state_borrow = unsafe { tracker.unsafe_borrow() };
             state_borrow.deadline.set(deadline).unwrap();
             state_borrow.execution_trace.queue_start.set(now).unwrap();
         }
@@ -532,7 +544,7 @@ impl SuperTensorBuffer {
         // If the batch is going to be completed, awaken the executor
         if batch_slot == (self.batch_size - 1) || batch_slot == 0 {
             // println!("Notifying executor on {}", idx.as_batch_id());
-            tracker.state.borrow().executor_notifier.notify_one();
+            unsafe { tracker.unsafe_borrow() }.executor_notifier.notify_one();
         }
         reservation
     }
@@ -567,7 +579,7 @@ impl SuperTensorBuffer {
             .trackers
             .get(current_executor_idx.as_batch_id())
             .unwrap();
-        let executor_notifier = tracker.state.borrow().executor_notifier.clone();
+        let executor_notifier = unsafe { tracker.unsafe_borrow() }.executor_notifier.clone();
         executor_notifier.notified().await;
 
         let notified_full = executor_notifier.notified();
@@ -579,7 +591,7 @@ impl SuperTensorBuffer {
             .as_absolute_batch_higher_bound()
             .wrapping_sub(head.as_absolute_index());
         if dist_to_higher > 0 && dist_to_higher < HALF_RANGE {
-            let maybe_deadline = tracker.state.borrow().deadline.get().copied();
+            let maybe_deadline = unsafe { tracker.unsafe_borrow() }.deadline.get().copied();
             if let Some(deadline) = maybe_deadline {
                 // let _now = Instant::now();
                 tokio::select! {
@@ -592,7 +604,7 @@ impl SuperTensorBuffer {
         }
 
         self.seal_current_batch(tracker, &current_executor_idx);
-        tracker.state.borrow().execution_trace.exec_start.set(Instant::now()).unwrap();
+        unsafe { tracker.unsafe_borrow() }.execution_trace.exec_start.set(Instant::now()).unwrap();
         let batch_items = tracker.written_slots.load(Ordering::Acquire);
         let _executors_in_use_guard = ExecutorsInUseGuard::new(&self.executors_in_use);
         self.execute_current_batch(f, tracker, &current_executor_idx)
@@ -647,19 +659,18 @@ impl SuperTensorBuffer {
         let input = self.get_data_view(current_executor_idx);
         let result = f(&input).await;
         // Put the results in the arc output, to be dispatched to consumers
-        let state = tracker.state.borrow();
+        let state = unsafe { tracker.unsafe_borrow() };
         state.execution_trace.exec_end.set(Instant::now()).unwrap();
         let cell_status = state.output.set(Ok(result));
         if cell_status.is_err() {
             panic!("Failed to set cell for the output of inference")
         }
         let notifier = state.response_ready_notifier.clone();
-        drop(state);
         notifier.notify_waiters();
     }
 
     fn reset_batch(&self, tracker: &DataTracker) {
-        *tracker.state.borrow_mut() = BatchState::new();
+        *unsafe { tracker.unsafe_borrow_mut() } = BatchState::new();
         tracker.written_slots.store(0, Ordering::Relaxed);
         tracker.dirty.store(2, Ordering::Relaxed);
     }
