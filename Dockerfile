@@ -33,13 +33,13 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --de
 ENV PATH="/root/.cargo/bin:${PATH}"
 
 # Download and install ONNX Runtime CUDA 13
-RUN wget -q https://github.com/microsoft/onnxruntime/releases/download/v1.24.3/onnxruntime-linux-x64-gpu_cuda13-1.24.3.tgz \
-    && tar -xzf onnxruntime-linux-x64-gpu_cuda13-1.24.3.tgz -C /opt \
-    && rm onnxruntime-linux-x64-gpu_cuda13-1.24.3.tgz
+RUN wget -q https://github.com/microsoft/onnxruntime/releases/download/v1.26.0/onnxruntime-linux-x64-gpu_cuda13-1.26.0.tgz \
+    && tar -xzf onnxruntime-linux-x64-gpu_cuda13-1.26.0.tgz -C /opt \
+    && rm onnxruntime-linux-x64-gpu_cuda13-1.26.0.tgz
 
 # Set ONNX Runtime environment variables
-ENV ORT_LIB_LOCATION="/opt/onnxruntime-linux-x64-gpu-1.24.3/lib"
-ENV ORT_DYLIB_PATH="/opt/onnxruntime-linux-x64-gpu-1.24.3/lib/libonnxruntime.so"
+ENV ORT_LIB_LOCATION="/opt/onnxruntime-linux-x64-gpu-1.26.0/lib"
+ENV ORT_DYLIB_PATH="/opt/onnxruntime-linux-x64-gpu-1.26.0/lib/libonnxruntime.so"
 ENV LD_LIBRARY_PATH="${ORT_LIB_LOCATION}:${LD_LIBRARY_PATH}"
 
 # Copy project source
