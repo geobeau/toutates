@@ -7,10 +7,12 @@ edition = "2021"
 
 [dependencies]
 tokio = { version = "1.47.0", features = ["full"] }
-compio = { version = "0.18", features = ["runtime", "time", "net", "io"] }
+# compio = { version = "0.18", features = ["runtime", "time", "net", "io"] }
+# compio = { path = "../compio/compio", features = ["runtime", "time", "net", "io"]}
+compio = { git = "https://github.com/compio-rs/compio", rev = "b06ff34caaa24c516821fe16da50191834524660", features = ["runtime", "time", "net", "io"] }
 criterion = "0.5.1"
-ort = { git = "https://github.com/pykeio/ort", rev = "b57e457d5b0f56aad6a093c081aee49c179c3fcb", features = [ "cuda", "load-dynamic"] }
-ort-sys = { git = "https://github.com/pykeio/ort", rev = "b57e457d5b0f56aad6a093c081aee49c179c3fcb", default-features = false }
+ort = { git = "https://github.com/pykeio/ort", rev = "76849504481c06c872c0b9450d39e8b9975c9b8e", features = [ "cuda", "load-dynamic"] }
+ort-sys = { git = "https://github.com/pykeio/ort", rev = "76849504481c06c872c0b9450d39e8b9975c9b8e", default-features = false }
 rand = "0.9.1"
 futures = "0.3.31"
 fusio = { version = "0.6", features = ["tokio-http", "aws"] }
@@ -35,6 +37,7 @@ hashbrown = "0.15"
 prometheus = "0.13"
 clap = { version = "4", features = ["derive"] }
 core_affinity = "0.8"
+mimalloc = { version = "0.1", default-features = false }
 
 [profile.dev]
 opt-level = 2
@@ -46,5 +49,5 @@ lto = true
 panic = 'abort'
 
 [build-dependencies]
-pajamax-build = { git = "https://github.com/geobeau/pajamax", branch = "main" }
+pajamax-build = { path = "../pajamax/pajamax-build" }
 prost-build = "0.14"
