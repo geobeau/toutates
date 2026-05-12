@@ -335,6 +335,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         handles.push(handle);
     }
 
+    // io_uring registered buffer pool (per-runtime, used by pajamax's read_multi).
+    let buffer_pool_size = std::num::NonZero::new(args.buffer_pool_size)
+        .expect("--buffer-pool-size must be > 0");
+    let buffer_pool_buffer_len = args.buffer_pool_buffer_len;
+
     // Spawn gRPC processing core threads.
     if let Some(pairs) = sqpoll_pairs {
         // SQPOLL path: each runtime gets its own SQPOLL kernel thread pinned to a
@@ -367,7 +372,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     proactor
                         .capacity(8096)
                         .sqpoll_idle(sqpoll_idle)
-                        .sqpoll_cpu(sqpoll_vcpu);
+                        .sqpoll_cpu(sqpoll_vcpu)
+                        .buffer_pool_size(buffer_pool_size)
+                        .buffer_pool_buffer_len(buffer_pool_buffer_len);
                     let rt = compio::runtime::RuntimeBuilder::new()
                         .with_proactor(proactor.to_owned())
                         .event_interval(1024)
@@ -421,7 +428,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     proactor
                         .capacity(8096)
                         .coop_taskrun(true)
-                        .taskrun_flag(true);
+                        .taskrun_flag(true)
+                        .buffer_pool_size(buffer_pool_size)
+                        .buffer_pool_buffer_len(buffer_pool_buffer_len);
 
                     let rt = compio::runtime::RuntimeBuilder::new()
                         .with_proactor(proactor.to_owned())

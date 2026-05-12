@@ -141,6 +141,16 @@ pub struct Args {
     /// SQPOLL kernel-thread idle timeout, in milliseconds.
     #[arg(long, default_value_t = 100)]
     pub sqpoll_idle_ms: u32,
+
+    /// io_uring registered buffer pool: number of buffers per runtime.
+    /// Rounded up to next power of two.
+    #[arg(long, default_value_t = 4096)]
+    pub buffer_pool_size: u16,
+
+    /// io_uring registered buffer pool: size of each buffer in bytes.
+    /// Each read fills at most one buffer; sets the per-recv ceiling.
+    #[arg(long, default_value_t = 8 * 1024)]
+    pub buffer_pool_buffer_len: usize,
 }
 
 pub enum ModelSource {
