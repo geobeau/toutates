@@ -3022,8 +3022,8 @@ pub struct ModelInferRequest {
     /// @@     If this field is specified then InferInputTensor::contents
     /// @@     must not be specified for any input tensor.
     /// @@
-    #[prost(bytes = "vec", repeated, tag = "7")]
-    pub raw_input_contents: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
+    #[prost(bytes = "bytes", repeated, tag = "7")]
+    pub raw_input_contents: ::prost::alloc::vec::Vec<::prost::bytes::Bytes>,
 }
 /// Nested message and enum types in `ModelInferRequest`.
 pub mod model_infer_request {
@@ -4382,7 +4382,7 @@ where
     async fn handle(
         &self,
         req_disc: usize,
-        req_buf: &[u8],
+        req_buf: ::prost::bytes::Bytes,
         stream_id: u32,
         resp_tx: &pajamax::RespTx,
     ) -> Result<(), pajamax::error::Error> {

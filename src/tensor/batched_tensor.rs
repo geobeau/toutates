@@ -38,12 +38,10 @@ macro_rules! copy_tensor_slice_from_bytes {
     ($ty:ty, $inner:expr, $single_tensor_shape:expr, $tensor_to_append:expr, $slot:expr) => {{
         let tensor_size = $single_tensor_shape.num_elements();
         let (_, data) = $inner.try_extract_tensor_mut::<$ty>().unwrap();
-        let data_to_insert = bytemuck::cast_slice($tensor_to_append);
         let offset = $slot * tensor_size;
-        // println!("inserting {} i32 at {offset} ({} * {tensor_size})", data_to_insert.len(), $slot);
-
-        data[offset..(offset + data_to_insert.len())]
-            .copy_from_slice(data_to_insert);
+        let src: &[u8] = $tensor_to_append;
+        let dst: &mut [u8] = bytemuck::cast_slice_mut(&mut data[offset..offset + tensor_size]);
+        dst.copy_from_slice(src);
     }};
 }
 
