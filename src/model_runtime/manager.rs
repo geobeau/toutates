@@ -197,11 +197,12 @@ impl ModelRuntimeManager {
                     // Merge override shape with model shape
                     // Override shape has same rank as model shape
                     // Dim 0 is -1 (batch) in both, will be replaced at request time
-                    for (i, override_dim) in override_shape.iter().enumerate() {
-                        if i < tensor_shape.len() {
-                            tensor_shape[i] = *override_dim;
-                        }
-                    }
+                    tensor_shape = override_shape.clone();
+                    // for (i, override_dim) in override_shape.iter().enumerate() {
+                    //     if i < tensor_shape.len() {
+                    //         tensor_shape[i] = *override_dim;
+                    //     }
+                    // }
                 }
 
                 ModelInput {
@@ -275,11 +276,12 @@ impl ModelRuntimeManager {
                 // Apply shape override if specified for this input
                 if let Some(override_shape) = config.input_shapes.get(input.name()) {
                     // Merge override shape with model shape
-                    for (i, override_dim) in override_shape.iter().enumerate() {
-                        if i < tensor_shape.len() {
-                            tensor_shape[i] = *override_dim;
-                        }
-                    }
+                    tensor_shape = override_shape.clone();
+                    // for (i, override_dim) in override_shape.iter().enumerate() {
+                    //     if i < tensor_shape.len() {
+                    //         tensor_shape[i] = *override_dim;
+                    //     }
+                    // }
                 }
 
                 let mut input_shape = tensor_shape.clone();
