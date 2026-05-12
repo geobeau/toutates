@@ -10,6 +10,7 @@ pub struct SessionStartRequest {
     pub executor_id: String,
     pub session: Session,
     pub model_proxy: Arc<ModelProxy>,
+    pub stop_profiling_after: Option<u64>,
 }
 
 pub struct SessionStarter {
@@ -28,6 +29,7 @@ impl SessionStarter {
                     id: req.executor_id,
                     session: req.session,
                     model: req.model_proxy,
+                    stop_profiling_after: req.stop_profiling_after,
                 };
                 executor.run().await;
             })

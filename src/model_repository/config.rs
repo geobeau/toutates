@@ -15,6 +15,17 @@ pub enum AllocatorKind {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct ProfilingConfig {
+    #[serde(default = "default_profile_prefix")]
+    pub file_prefix: String,
+    pub stop_after_batches: Option<u64>,
+}
+
+fn default_profile_prefix() -> String {
+    String::from("ort_profile")
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct ModelRepositoryConfig {
     pub backend: Backend,
     pub batch_size: usize,
@@ -25,4 +36,6 @@ pub struct ModelRepositoryConfig {
     pub input_shapes: HashMap<String, Vec<i64>>,
     #[serde(default)]
     pub output_shapes: HashMap<String, Vec<i64>>,
+    #[serde(default)]
+    pub profiling: Option<ProfilingConfig>,
 }

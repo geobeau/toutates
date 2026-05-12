@@ -13,13 +13,14 @@ pub struct OnnxExecutor {
     pub id: String,
     pub session: Session,
     pub model: Arc<ModelProxy>,
+    pub stop_profiling_after: Option<u64>,
 }
 
 impl OnnxExecutor {
     pub async fn run(&mut self) {
         info!(id = %self.id, "executor started");
         let model_name = self.model.model_config.name.clone();
-        let mut i = 0;
+        let mut i: u64 = 0;
         loop {
             // println!("trying to execute another batch");
             let batch_items = self.model
@@ -47,10 +48,10 @@ impl OnnxExecutor {
             with_local_metrics(|m| {
                 m.observe_batch_items(&model_name, batch_items as f64);
             });
-            i = i+1;
-            // if i == 1000 {
-            //     self.session.end_profiling().unwrap();
-            // }
+            i += 1;
+            if Some(i) == self.stop_profiling_after {
+                self.session.end_profiling().unwrap();
+            }
             // println!("executed batch")
         }
     }

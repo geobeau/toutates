@@ -127,9 +127,13 @@ impl ModelRuntimeManager {
             let mut builder = Session::builder()
                 .map_err(|e| LoadError::SessionBuild(e.to_string()))?
                 .with_optimization_level(GraphOptimizationLevel::Level3)
-                // .map_err(|e| LoadError::SessionBuild(e.to_string()))?
-                // .with_profiling("ort_profile")
                 .map_err(|e| LoadError::SessionBuild(e.to_string()))?;
+
+            if let Some(profiling) = &config.profiling {
+                builder = builder
+                    .with_profiling(&profiling.file_prefix)
+                    .map_err(|e| LoadError::SessionBuild(e.to_string()))?;
+            }
 
             for lib_path in &self.custom_op_libraries {
                 info!(?lib_path, "Registering custom op library");
@@ -406,6 +410,10 @@ impl ModelRuntimeManager {
         );
 
         // Dispatch sessions round-robin to executor cores
+        let stop_profiling_after = config
+            .profiling
+            .as_ref()
+            .and_then(|p| p.stop_after_batches);
         for (i, session) in sessions.into_iter().enumerate() {
             let idx = self.round_robin.fetch_add(1, Ordering::Relaxed) % self.starters.len();
             self.starters[idx]
@@ -413,6 +421,7 @@ impl ModelRuntimeManager {
                     executor_id: format!("{}-executor-{i}", &model_name),
                     session,
                     model_proxy: model_proxy.clone(),
+                    stop_profiling_after,
                 })
                 .await
                 .map_err(|e| LoadError::DispatchFailed(e.to_string()))?;
