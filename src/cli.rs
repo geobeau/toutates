@@ -129,6 +129,18 @@ pub struct Args {
     /// Pin each compio runtime thread to a CPU from the process cpuset in round-robin order.
     #[arg(long, default_value_t = false)]
     pub cpu_pinning: bool,
+
+    /// Enable io_uring SQPOLL for gRPC processing cores. Each runtime gets its
+    /// own SQPOLL kernel thread pinned to a dedicated vCPU. Runtimes and
+    /// SQPOLL kthreads are paired within the same NUMA node but on different
+    /// physical cores (no SMT contention between userspace and kthread).
+    /// Requires --cpu-pinning.
+    #[arg(long, default_value_t = false)]
+    pub sqpoll_enabled: bool,
+
+    /// SQPOLL kernel-thread idle timeout, in milliseconds.
+    #[arg(long, default_value_t = 100)]
+    pub sqpoll_idle_ms: u32,
 }
 
 pub enum ModelSource {

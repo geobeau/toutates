@@ -185,6 +185,7 @@ pub fn value_as_byte_slice(value: &Value, start: usize, end: usize) -> &[u8] {
         TensorElementType::Int4 => todo!(),
         TensorElementType::String => todo!(),
         TensorElementType::Undefined => todo!(),
+        _ => todo!(),
     }
 }
 
@@ -249,6 +250,7 @@ impl BatchedTensor {
             TensorElementType::Int4 => todo!(),
             TensorElementType::String => todo!(),
             TensorElementType::Undefined => todo!(),
+        _ => todo!(),
         }
     }
 
@@ -307,6 +309,7 @@ impl BatchedTensor {
             TensorElementType::Int4 => todo!(),
             TensorElementType::String => todo!(),
             TensorElementType::Undefined => todo!(),
+        _ => todo!(),
         };
         tensor
     }
@@ -443,6 +446,7 @@ impl BatchableTensor {
             TensorElementType::Int4 => todo!(),
             TensorElementType::String => todo!(),
             TensorElementType::Undefined => todo!(),
+        _ => todo!(),
         };
     }
 
@@ -495,6 +499,7 @@ impl BatchableTensor {
             TensorElementType::Int4 => todo!(),
             TensorElementType::String => todo!(),
             TensorElementType::Undefined => todo!(),
+        _ => todo!(),
         };
     }
 }
@@ -536,6 +541,7 @@ impl From<TensorElementType> for DataType {
             TensorElementType::Uint4 => DataType::TypeInvalid,
             TensorElementType::Int4 => DataType::TypeInvalid,
             TensorElementType::Undefined => DataType::TypeInvalid,
+            _ => DataType::TypeInvalid,
         }
     }
 }
