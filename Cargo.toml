@@ -49,5 +49,5 @@ lto = true
 panic = 'abort'
 
 [build-dependencies]
-pajamax-build = { path = "../pajamax/pajamax-build" }
+pajamax-build = { git = "https://github.com/geobeau/pajamax", branch = "main" }
 prost-build = "0.14"
