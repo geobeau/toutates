@@ -11,11 +11,17 @@ RUN apt-get update && apt-get install -y \
     protobuf-compiler \
     wget \
     btop \
+    htop \
     ca-certificates \
     gnupg \
-    gdb \ 
+    gdb \
     linux-tools-generic \
+    locales \
+    && locale-gen en_US.UTF-8 \
     && rm -rf /var/lib/apt/lists/*
+
+ENV LANG=en_US.UTF-8
+ENV LC_ALL=en_US.UTF-8
 
 # Install CUDA 13 (toolkit 13.0)
 RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb \
