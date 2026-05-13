@@ -47,10 +47,12 @@ WORKDIR /build/inference-server
 COPY . .
 
 # Build the project
-RUN cargo build --release
+RUN cargo build --release \
+    && cp target/release/inference-server /usr/local/bin/inference-server \
+    && rm -rf target /root/.cargo/registry /root/.cargo/git
 
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash --uid 1001 appuser
 USER 1001
 
-ENTRYPOINT ["/build/inference-server/target/release/inference-server"]
+ENTRYPOINT ["/usr/local/bin/inference-server"]
