@@ -142,6 +142,12 @@ pub struct Args {
     #[arg(long, default_value_t = 100)]
     pub sqpoll_idle_ms: u32,
 
+    /// io_uring SQ/CQ ring capacity (entries) per runtime. The rings are
+    /// kernel-mapped and charged against RLIMIT_MEMLOCK on recent kernels —
+    /// drop this if you hit ENOMEM during runtime build with many workers.
+    #[arg(long, default_value_t = 8096)]
+    pub io_uring_capacity: u32,
+
     /// io_uring registered buffer pool: number of buffers per runtime.
     /// Rounded up to next power of two.
     #[arg(long, default_value_t = 4096)]

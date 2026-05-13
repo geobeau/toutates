@@ -339,6 +339,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let buffer_pool_size = std::num::NonZero::new(args.buffer_pool_size)
         .expect("--buffer-pool-size must be > 0");
     let buffer_pool_buffer_len = args.buffer_pool_buffer_len;
+    let io_uring_capacity = args.io_uring_capacity;
 
     // Spawn gRPC processing core threads.
     if let Some(pairs) = sqpoll_pairs {
@@ -370,7 +371,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                     let mut proactor = compio::driver::ProactorBuilder::new();
                     proactor
-                        .capacity(8096)
+                        .capacity(io_uring_capacity)
                         .sqpoll_idle(sqpoll_idle)
                         .sqpoll_cpu(sqpoll_vcpu)
                         .buffer_pool_size(buffer_pool_size)
@@ -426,7 +427,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     let mut proactor = compio::driver::ProactorBuilder::new();
                     proactor
-                        .capacity(8096)
+                        .capacity(io_uring_capacity)
                         .coop_taskrun(true)
                         .taskrun_flag(true)
                         .buffer_pool_size(buffer_pool_size)
