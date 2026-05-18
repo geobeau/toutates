@@ -40,7 +40,9 @@ macro_rules! copy_tensor_slice_from_bytes {
         let (_, data) = $inner.try_extract_tensor_mut::<$ty>().unwrap();
         let offset = $slot * tensor_size;
         let src: &[u8] = $tensor_to_append;
-        let dst: &mut [u8] = bytemuck::cast_slice_mut(&mut data[offset..offset + tensor_size]);
+        let elem_count = src.len() / std::mem::size_of::<$ty>();
+        let dst: &mut [u8] =
+            bytemuck::cast_slice_mut(&mut data[offset..offset + elem_count]);
         dst.copy_from_slice(src);
     }};
 }
