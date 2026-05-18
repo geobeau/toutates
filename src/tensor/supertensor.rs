@@ -17,7 +17,7 @@ use ort::{
 };
 use smallvec::SmallVec;
 use tokio::{sync::Notify};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{
     tensor::batched_tensor::{value_as_byte_slice, BatchableTensor, TensorBytes},
@@ -588,7 +588,27 @@ impl SuperTensorBuffer {
             .get(current_executor_idx.as_batch_id())
             .expect("invariant: ring index is masked into [0, capacity)");
         let executor_notifier = unsafe { tracker.unsafe_borrow() }.executor_notifier.clone();
-        executor_notifier.notified().await;
+        {
+            let notified = executor_notifier.notified();
+            let mut notified = std::pin::pin!(notified);
+            let timed_out = tokio::select! {
+                biased;
+                _ = notified.as_mut() => false,
+                _ = compio::time::sleep(Duration::from_millis(100)) => true,
+            };
+            if timed_out {
+                warn!(
+                    batch_id = current_executor_idx.as_batch_id(),
+                    idx = current_executor_idx.as_absolute_index(),
+                    head = self.head.load(Ordering::Acquire).as_absolute_index(),
+                    tail = self.tail.load(Ordering::Acquire).as_absolute_index(),
+                    written_slots = tracker.written_slots.load(Ordering::Acquire),
+                    dirty = tracker.dirty.load(Ordering::Acquire),
+                    "executor stuck on first notified().await > 100ms"
+                );
+                notified.await;
+            }
+        }
 
         let notified_full = executor_notifier.notified();
         let head = self.head.load(Ordering::Acquire);
@@ -601,12 +621,29 @@ impl SuperTensorBuffer {
         if dist_to_higher > 0 && dist_to_higher < HALF_RANGE {
             let maybe_deadline = unsafe { tracker.unsafe_borrow() }.deadline.get().copied();
             if let Some(deadline) = maybe_deadline {
-                // let _now = Instant::now();
-                tokio::select! {
-                    _ = sleep_until(deadline) => {
-                        // println!("awaken by sleep after {:?}", now.elapsed())
-                    },
-                    _ = notified_full => {},
+                let select_fut = async {
+                    tokio::select! {
+                        _ = sleep_until(deadline) => {},
+                        _ = notified_full => {},
+                    }
+                };
+                let mut select_fut = std::pin::pin!(select_fut);
+                let timed_out = tokio::select! {
+                    biased;
+                    _ = select_fut.as_mut() => false,
+                    _ = compio::time::sleep(Duration::from_millis(100)) => true,
+                };
+                if timed_out {
+                    warn!(
+                        batch_id = current_executor_idx.as_batch_id(),
+                        idx = current_executor_idx.as_absolute_index(),
+                        head = self.head.load(Ordering::Acquire).as_absolute_index(),
+                        tail = self.tail.load(Ordering::Acquire).as_absolute_index(),
+                        written_slots = tracker.written_slots.load(Ordering::Acquire),
+                        dirty = tracker.dirty.load(Ordering::Acquire),
+                        "executor stuck inside deadline+notified_full select > 100ms"
+                    );
+                    select_fut.await;
                 }
             }
         }
