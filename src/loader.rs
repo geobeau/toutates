@@ -3,7 +3,7 @@ use std::sync::Arc;
 use ort::session::{RunOptions, Session};
 use smallvec::SmallVec;
 
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{
     metrics::with_local_metrics, scheduler::ModelProxy, tensor::supertensor::SessionValues,
@@ -28,12 +28,20 @@ impl OnnxExecutor {
                 .execute_on_batch(self.id.clone(), async |inputs| {
                     let start = std::time::Instant::now();
                     let run_options: RunOptions = RunOptions::new().unwrap();
-                    let session_outputs = self
-                        .session
-                        .run_async(inputs, &run_options)
-                        .unwrap()
-                        .await
-                        .unwrap();
+                    let fut = self.session.run_async(inputs, &run_options).unwrap();
+                    let mut fut = std::pin::pin!(fut);
+                    let session_outputs = tokio::select! {
+                        biased;
+                        result = fut.as_mut() => result.unwrap(),
+                        _ = compio::time::sleep(std::time::Duration::from_millis(10)) => {
+                            warn!(
+                                executor = %self.id,
+                                model = %model_name,
+                                "ort::run_async exceeded 10ms — likely missed-wakeup hang"
+                            );
+                            fut.await.unwrap()
+                        }
+                    };
                     with_local_metrics(|m| {
                         m.observe_model_execution(&model_name, start.elapsed().as_secs_f64());
                     });
