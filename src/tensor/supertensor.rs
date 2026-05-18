@@ -539,11 +539,9 @@ impl SuperTensorBuffer {
         fence(Ordering::Release);
 
         let tracker = self.trackers.get(idx.as_batch_id()).unwrap();
-        let reservation =
-            WriteReservation::new(tracker, batch_slot, batch_slot + (data_end - data_start));
-        // If the batch is going to be completed, awaken the executor
-        if batch_slot == (self.batch_size - 1) || batch_slot == 0 {
-            // println!("Notifying executor on {}", idx.as_batch_id());
+        let end = batch_slot + (data_end - data_start);
+        let reservation = WriteReservation::new(tracker, batch_slot, end);
+        if batch_slot == 0 || end == self.batch_size {
             unsafe { tracker.unsafe_borrow() }.executor_notifier.notify_one();
         }
         reservation
