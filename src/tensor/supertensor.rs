@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     cell::{OnceCell, RefCell, UnsafeCell},
     cmp::min,
     collections::HashMap,
@@ -24,6 +25,23 @@ use crate::{
 };
 
 const HALF_RANGE: usize = usize::MAX / 2;
+
+#[derive(Debug, Clone)]
+pub enum InferError {
+    RingFull,
+    UnsupportedDataType,
+    SessionRun(Arc<str>),
+}
+
+impl InferError {
+    pub fn message(&self) -> Cow<'static, str> {
+        match self {
+            Self::RingFull => Cow::Borrowed("Ring buffer full"),
+            Self::UnsupportedDataType => Cow::Borrowed("Unsupported tensor data type"),
+            Self::SessionRun(s) => Cow::Owned(s.as_ref().to_string()),
+        }
+    }
+}
 
 struct ExecutorsInUseGuard<'a> {
     executors_in_use: &'a AtomicUsize,
@@ -58,7 +76,7 @@ pub struct ExecutionTrace {
 
 struct BatchState {
     deadline: OnceCell<Instant>,
-    output: Arc<OnceCell<Result<SessionValues, usize>>>,
+    output: Arc<OnceCell<Result<SessionValues, InferError>>>,
     executor_notifier: Arc<Notify>,
     response_ready_notifier: Arc<Notify>,
     execution_trace: Arc<ExecutionTrace>
@@ -117,10 +135,10 @@ impl InferenceResponse {
         self.outputs.push(reservation);
     }
 
-    pub async fn get_data(self, data: &mut Vec<Vec<u8>>) -> (Vec<(TensorElementType, Shape)>, Arc<ExecutionTrace>) {
+    pub async fn get_data(self, data: &mut Vec<Vec<u8>>) -> Result<(Vec<(TensorElementType, Shape)>, Arc<ExecutionTrace>), InferError> {
         let mut maybe_metadatas: Option<(Vec<(TensorElementType, Shape)>, Arc<ExecutionTrace>)> = None;
         for output in self.outputs.into_iter() {
-            let batch_metadatas = output.get_result(data).await;
+            let batch_metadatas = output.get_result(data).await?;
             match &mut maybe_metadatas {
                 Some(metadatas) => {
                     batch_metadatas
@@ -135,13 +153,13 @@ impl InferenceResponse {
                 None => maybe_metadatas = Some(batch_metadatas),
             };
         }
-        maybe_metadatas.unwrap()
+        Ok(maybe_metadatas.expect("invariant: response has at least one reservation"))
     }
 }
 
 // Ensure accounting when tasks are canceled
 pub struct WriteReservation {
-    output: Arc<OnceCell<Result<SessionValues, usize>>>,
+    output: Arc<OnceCell<Result<SessionValues, InferError>>>,
     trace: Arc<ExecutionTrace>,
     response_ready_notifier: Arc<Notify>,
     start: usize,
@@ -166,35 +184,27 @@ impl WriteReservation {
         }
     }
 
-    async fn get_result(self, data: &mut Vec<Vec<u8>>) -> (Vec<(TensorElementType, Shape)>, Arc<ExecutionTrace>) {
+    async fn get_result(self, data: &mut Vec<Vec<u8>>) -> Result<(Vec<(TensorElementType, Shape)>, Arc<ExecutionTrace>), InferError> {
         loop {
             let notified = self.response_ready_notifier.notified();
             if let Some(result) = self.output.get() {
+                let output = match result {
+                    Ok(output) => output,
+                    Err(err) => return Err(err.clone()),
+                };
                 let mut metadatas = Vec::new();
-                match result {
-                    Ok(output) => {
-                        if data.is_empty() {
-                            output.values.iter().for_each(|_| data.push(Vec::new()));
-                        }
-                        output
-                            .values
-                            .iter()
-                            .enumerate()
-                            .for_each(|(i, batch_tensor)| {
-                                data[i].extend_from_slice(value_as_byte_slice(
-                                    batch_tensor,
-                                    self.start,
-                                    self.end,
-                                ));
-                                metadatas.push((
-                                    *batch_tensor.data_type(),
-                                    batch_tensor.shape().clone(),
-                                ));
-                            });
-                    }
-                    Err(_) => todo!(),
+                if data.is_empty() {
+                    output.values.iter().for_each(|_| data.push(Vec::new()));
                 }
-                return (metadatas, self.trace.clone());
+                for (i, batch_tensor) in output.values.iter().enumerate() {
+                    let slice = value_as_byte_slice(batch_tensor, self.start, self.end)?;
+                    data[i].extend_from_slice(slice);
+                    metadatas.push((
+                        *batch_tensor.data_type(),
+                        batch_tensor.shape().clone(),
+                    ));
+                }
+                return Ok((metadatas, self.trace.clone()));
             }
             notified.await;
         }
@@ -311,7 +321,6 @@ pub struct SuperTensorBuffer {
     // Mask to get position within the batch
     batch_mask: usize,
     executor_full_notifier: Notify,
-    infer_full_notifier: Notify,
 }
 
 impl SuperTensorBuffer {
@@ -417,7 +426,6 @@ impl SuperTensorBuffer {
                 ring_mask,
                 batch_mask,
                 executor_full_notifier: Notify::new(),
-                infer_full_notifier: Notify::new(),
             })
         }
     }
@@ -426,7 +434,7 @@ impl SuperTensorBuffer {
         &self,
         data: &[TensorBytes<'_>],
         trace: &mut ClientTrace,
-    ) -> Result<InferenceResponse, usize> {
+    ) -> Result<InferenceResponse, InferError> {
         loop {
             let mut current_head = self.head.load(Ordering::Relaxed);
             let current_tail = self.tail.load(Ordering::Acquire);
@@ -434,9 +442,7 @@ impl SuperTensorBuffer {
             // Check if the ring is full
             // TODO: make check batch compatible
             if current_head.wrapping_sub(&current_tail) >= self.capacity * self.batch_size {
-                // println!("Buffer full, yielding");
-                self.infer_full_notifier.notified().await;
-                continue;
+                return Err(InferError::RingFull);
             }
             // TODO: validate before that:
             // - data and shape is not empty
@@ -473,7 +479,7 @@ impl SuperTensorBuffer {
                             input_start,
                             input_end,
                             data,
-                        );
+                        )?;
                         response.push(write_reservation);
                         input_start = input_end;
                         client_batch_size -= to_write;
@@ -504,52 +510,56 @@ impl SuperTensorBuffer {
         data_start: usize,
         data_end: usize,
         data: &[TensorBytes<'_>],
-    ) -> WriteReservation {
+    ) -> Result<WriteReservation, InferError> {
         // batch_slot is the index of the slot within a batch
         // Used to track if it's the first or last reservation on the batch
-        // println!(
-        //     "Inserting in {} at -> {}",
-        //     idx.as_batch_id(),
-        //     idx.as_batch_slot_id()
-        // );
         let batch_slot = idx.as_batch_slot_id();
         let batch_id = idx.as_batch_id();
-        self.input_tensors[batch_id]
-            .iter()
-            .enumerate()
-            .for_each(|(i, tensors)| {
-                unsafe {
-                    // Isolation of portions of the vector is guaranteed by reserved_slots atomics
-                    let slice = data[i].slice_dim0(data_start, data_end);
-                    let batch_tensor = (&mut *tensors.get());
-                    // println!("Slicing of len {} -> {} between {data_start} and {data_end}", slice.len(), batch_tensor.inner_tensor.shape().num_elements() );
-                    batch_tensor.copy_at_from_bytes(batch_slot, slice)
-                }
-            });
+        for (i, tensors) in self.input_tensors[batch_id].iter().enumerate() {
+            unsafe {
+                // Isolation of portions of the vector is guaranteed by reserved_slots atomics
+                let slice = data[i].slice_dim0(data_start, data_end);
+                let batch_tensor = &mut *tensors.get();
+                batch_tensor.copy_at_from_bytes(batch_slot, slice)?;
+            }
+        }
         if batch_slot == 0 {
-            let tracker = self.trackers.get(idx.as_batch_id()).unwrap();
+            let tracker = self
+                .trackers
+                .get(idx.as_batch_id())
+                .expect("invariant: ring index is masked into [0, capacity)");
             let now = Instant::now();
             let deadline = now + Duration::from_millis(2);
             tracker.dirty.store(1, Ordering::Relaxed);
             // println!("{}> writing deadline", idx.as_batch_id());
             let state_borrow = unsafe { tracker.unsafe_borrow() };
-            state_borrow.deadline.set(deadline).unwrap();
-            state_borrow.execution_trace.queue_start.set(now).unwrap();
+            state_borrow
+                .deadline
+                .set(deadline)
+                .expect("invariant: deadline set exactly once per batch lifecycle");
+            state_borrow
+                .execution_trace
+                .queue_start
+                .set(now)
+                .expect("invariant: queue_start set exactly once per batch lifecycle");
         }
         fence(Ordering::Release);
 
-        let tracker = self.trackers.get(idx.as_batch_id()).unwrap();
+        let tracker = self
+            .trackers
+            .get(idx.as_batch_id())
+            .expect("invariant: ring index is masked into [0, capacity)");
         let end = batch_slot + (data_end - data_start);
         let reservation = WriteReservation::new(tracker, batch_slot, end);
         if batch_slot == 0 || end == self.batch_size {
             unsafe { tracker.unsafe_borrow() }.executor_notifier.notify_one();
         }
-        reservation
+        Ok(reservation)
     }
 
     pub async fn execute_on_batch<F>(&self, _id: String, f: F) -> usize
     where
-        F: AsyncFnOnce(&[SessionInputValue]) -> SessionValues,
+        F: AsyncFnOnce(&[SessionInputValue]) -> Result<SessionValues, InferError>,
     {
         let mut current_executor_idx; // Defined as RingBufferIndex
         loop {
@@ -576,7 +586,7 @@ impl SuperTensorBuffer {
         let tracker = self
             .trackers
             .get(current_executor_idx.as_batch_id())
-            .unwrap();
+            .expect("invariant: ring index is masked into [0, capacity)");
         let executor_notifier = unsafe { tracker.unsafe_borrow() }.executor_notifier.clone();
         executor_notifier.notified().await;
 
@@ -602,7 +612,11 @@ impl SuperTensorBuffer {
         }
 
         self.seal_current_batch(tracker, &current_executor_idx);
-        unsafe { tracker.unsafe_borrow() }.execution_trace.exec_start.set(Instant::now()).unwrap();
+        unsafe { tracker.unsafe_borrow() }
+            .execution_trace
+            .exec_start
+            .set(Instant::now())
+            .expect("invariant: exec_start set exactly once per batch lifecycle");
         let batch_items = tracker.written_slots.load(Ordering::Acquire);
         let _executors_in_use_guard = ExecutorsInUseGuard::new(&self.executors_in_use);
         self.execute_current_batch(f, tracker, &current_executor_idx)
@@ -652,17 +666,22 @@ impl SuperTensorBuffer {
         tracker: &DataTracker,
         current_executor_idx: &RingBufferIndex<'_>,
     ) where
-        F: AsyncFnOnce(&[SessionInputValue]) -> SessionValues,
+        F: AsyncFnOnce(&[SessionInputValue]) -> Result<SessionValues, InferError>,
     {
         let input = self.get_data_view(current_executor_idx);
         let result = f(&input).await;
         // Put the results in the arc output, to be dispatched to consumers
         let state = unsafe { tracker.unsafe_borrow() };
-        state.execution_trace.exec_end.set(Instant::now()).unwrap();
-        let cell_status = state.output.set(Ok(result));
-        if cell_status.is_err() {
-            panic!("Failed to set cell for the output of inference")
-        }
+        state
+            .execution_trace
+            .exec_end
+            .set(Instant::now())
+            .expect("invariant: exec_end set exactly once per batch lifecycle");
+        state
+            .output
+            .set(result)
+            .ok()
+            .expect("invariant: output cell set exactly once per batch lifecycle");
         let notifier = state.response_ready_notifier.clone();
         notifier.notify_waiters();
     }
@@ -701,7 +720,6 @@ impl SuperTensorBuffer {
                     .is_ok()
             {
                 self.executor_full_notifier.notify_waiters();
-                self.infer_full_notifier.notify_waiters();
                 continue;
             }
             break;

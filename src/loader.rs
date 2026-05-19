@@ -6,7 +6,9 @@ use smallvec::SmallVec;
 use tracing::info;
 
 use crate::{
-    metrics::with_local_metrics, scheduler::ModelProxy, tensor::supertensor::SessionValues,
+    metrics::with_local_metrics,
+    scheduler::ModelProxy,
+    tensor::supertensor::{InferError, SessionValues},
 };
 
 pub struct OnnxExecutor {
@@ -27,13 +29,14 @@ impl OnnxExecutor {
                 .data
                 .execute_on_batch(self.id.clone(), async |inputs| {
                     let start = std::time::Instant::now();
-                    let run_options: RunOptions = RunOptions::new().unwrap();
+                    let run_options: RunOptions = RunOptions::new()
+                        .map_err(|e| InferError::SessionRun(Arc::from(e.to_string())))?;
                     let session_outputs = self
                         .session
                         .run_async(inputs, &run_options)
-                        .unwrap()
+                        .map_err(|e| InferError::SessionRun(Arc::from(e.to_string())))?
                         .await
-                        .unwrap();
+                        .map_err(|e| InferError::SessionRun(Arc::from(e.to_string())))?;
                     with_local_metrics(|m| {
                         m.observe_model_execution(&model_name, start.elapsed().as_secs_f64());
                     });
@@ -42,7 +45,7 @@ impl OnnxExecutor {
                     session_outputs.into_iter().for_each(|(_, value)| {
                         values.push(value);
                     });
-                    SessionValues { values }
+                    Ok(SessionValues { values })
                 })
                 .await;
             with_local_metrics(|m| {

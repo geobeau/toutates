@@ -19,7 +19,19 @@ use crate::grpc::inference::model_infer_response::InferOutputTensor;
 use crate::metrics::with_local_metrics;
 use crate::scheduler::ModelProxy;
 use crate::tensor::batched_tensor::TensorBytes;
+use crate::tensor::supertensor::InferError;
 use crate::tracing::ClientTrace;
+
+fn infer_error_to_status(err: &InferError) -> Status {
+    let code = match err {
+        InferError::RingFull => Code::ResourceExhausted,
+        _ => Code::Internal,
+    };
+    Status {
+        code,
+        message: err.message().into_owned(),
+    }
+}
 
 pub struct TritonService {
     pub loaded_models: Arc<ArcSwap<HashMap<String, Arc<ModelProxy>>>>,
@@ -173,7 +185,7 @@ impl GrpcInferenceService for TritonService {
                 .model_metadata
                 .input_set
                 .get(&req_input.name)
-                .expect("Input not in model")
+                .expect("invariant: input validated against model_metadata.input_set")
                 .order
         });
         let mut inputs: SmallVec<[TensorBytes; 6]> = SmallVec::with_capacity(ordered_inputs.len());
@@ -190,10 +202,28 @@ impl GrpcInferenceService for TritonService {
         }
 
         trace.record_serialization_done();
-        let inference_outputs = proxy.data.infer(&inputs, &mut trace).await.unwrap();
+        let inference_outputs = match proxy.data.infer(&inputs, &mut trace).await {
+            Ok(resp) => resp,
+            Err(e) => {
+                with_local_metrics(|m| match &e {
+                    InferError::RingFull => m.inc_requests_resource_exhausted(&model_name),
+                    _ => m.inc_requests_error(&model_name),
+                });
+                return Err(infer_error_to_status(&e));
+            }
+        };
         let mut raw_output: Vec<Vec<u8>> = Vec::new();
 
-        let output_metadata = inference_outputs.get_data(&mut raw_output).await;
+        let output_metadata = match inference_outputs.get_data(&mut raw_output).await {
+            Ok(meta) => meta,
+            Err(e) => {
+                with_local_metrics(|m| match &e {
+                    InferError::RingFull => m.inc_requests_resource_exhausted(&model_name),
+                    _ => m.inc_requests_error(&model_name),
+                });
+                return Err(infer_error_to_status(&e));
+            }
+        };
         let outputs = output_metadata.0
             .iter()
             .zip(proxy.model_metadata.output_meta.iter())

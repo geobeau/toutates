@@ -37,6 +37,8 @@ pub fn flush_local_metrics() {
 struct LocalModelMetrics {
     requests_ok: LocalIntCounter,
     requests_not_found: LocalIntCounter,
+    requests_resource_exhausted: LocalIntCounter,
+    requests_error: LocalIntCounter,
     request_duration: LocalHistogram,
     batch_items: LocalHistogram,
     client_batch_size: LocalHistogram,
@@ -76,6 +78,14 @@ impl LocalMetrics {
                     requests_not_found: r
                         .inference_requests_total
                         .with_label_values(&[model, "not_found"])
+                        .local(),
+                    requests_resource_exhausted: r
+                        .inference_requests_total
+                        .with_label_values(&[model, "resource_exhausted"])
+                        .local(),
+                    requests_error: r
+                        .inference_requests_total
+                        .with_label_values(&[model, "error"])
                         .local(),
                     request_duration: r
                         .inference_request_duration_seconds
@@ -130,6 +140,18 @@ impl LocalMetrics {
     pub fn inc_requests_not_found(&self, model: &str) {
         self.ensure_model(model);
         self.per_model.borrow()[model].requests_not_found.inc();
+    }
+
+    pub fn inc_requests_resource_exhausted(&self, model: &str) {
+        self.ensure_model(model);
+        self.per_model.borrow()[model]
+            .requests_resource_exhausted
+            .inc();
+    }
+
+    pub fn inc_requests_error(&self, model: &str) {
+        self.ensure_model(model);
+        self.per_model.borrow()[model].requests_error.inc();
     }
 
     pub fn observe_request_duration(&self, model: &str, duration: f64) {
@@ -202,6 +224,8 @@ impl LocalMetrics {
         for (_, m) in self.per_model.borrow().iter() {
             m.requests_ok.flush();
             m.requests_not_found.flush();
+            m.requests_resource_exhausted.flush();
+            m.requests_error.flush();
             m.request_duration.flush();
             m.batch_items.flush();
             m.client_batch_size.flush();

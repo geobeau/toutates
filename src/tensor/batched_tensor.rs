@@ -1,3 +1,5 @@
+use crate::tensor::supertensor::InferError;
+
 pub struct TensorBytes<'a> {
     pub data_type: DataType,
     pub shape: Shape,
@@ -37,7 +39,7 @@ pub struct BatchedTensor {
 macro_rules! copy_tensor_slice_from_bytes {
     ($ty:ty, $inner:expr, $single_tensor_shape:expr, $tensor_to_append:expr, $slot:expr) => {{
         let tensor_size = $single_tensor_shape.num_elements();
-        let (_, data) = $inner.try_extract_tensor_mut::<$ty>().unwrap();
+        let (_, data) = $inner.try_extract_tensor_mut::<$ty>().expect("invariant: tensor type tag matches at construction");
         let offset = $slot * tensor_size;
         let src: &[u8] = $tensor_to_append;
         let elem_count = src.len() / std::mem::size_of::<$ty>();
@@ -49,17 +51,17 @@ macro_rules! copy_tensor_slice_from_bytes {
 
 macro_rules! copy_tensor_slice {
     ($ty:ty, $inner:expr, $tensor_to_append:expr, $slot:expr) => {{
-        let (new_shape, new_data) = $tensor_to_append.try_extract_tensor::<$ty>().unwrap();
+        let (new_shape, new_data) = $tensor_to_append.try_extract_tensor::<$ty>().expect("invariant: tensor type tag matches at construction");
         let tensor_size = new_shape.num_elements();
-        let (_, data) = $inner.try_extract_tensor_mut::<$ty>().unwrap();
+        let (_, data) = $inner.try_extract_tensor_mut::<$ty>().expect("invariant: tensor type tag matches at construction");
         data[$slot * tensor_size..($slot + 1) * tensor_size].copy_from_slice(new_data);
     }};
 }
 
 macro_rules! pop_tensor_slice {
     ($ty:ty, $inner:expr, $new_tensor:expr, $offset:expr) => {{
-        let (new_shape, data) = $new_tensor.try_extract_tensor_mut::<$ty>().unwrap();
-        let (_, inner_data) = $inner.try_extract_tensor::<$ty>().unwrap();
+        let (new_shape, data) = $new_tensor.try_extract_tensor_mut::<$ty>().expect("invariant: tensor type tag matches at construction");
+        let (_, inner_data) = $inner.try_extract_tensor::<$ty>().expect("invariant: tensor type tag matches at construction");
         let tensor_size = new_shape.num_elements();
         data.copy_from_slice(&inner_data[$offset * tensor_size..($offset + 1) * tensor_size]);
     }};
@@ -67,7 +69,7 @@ macro_rules! pop_tensor_slice {
 
 macro_rules! as_byte_slice {
     ($ty:ty, $inner:expr, $start:expr, $end:expr) => {{
-        let (_, inner_data) = $inner.try_extract_tensor::<$ty>().unwrap();
+        let (_, inner_data) = $inner.try_extract_tensor::<$ty>().expect("invariant: tensor type tag matches at construction");
         bytemuck::cast_slice(&inner_data[$start..$end])
     }};
 }
@@ -136,57 +138,22 @@ impl BatchedOutputs {
     }
 }
 
-pub fn value_as_byte_slice(value: &Value, start: usize, end: usize) -> &[u8] {
-    match value.data_type() {
-        TensorElementType::Float32 => {
-            as_byte_slice!(f32, value, start, end)
-        }
-        TensorElementType::Uint8 => {
-            as_byte_slice!(u8, value, start, end)
-        }
-        TensorElementType::Int8 => {
-            as_byte_slice!(i8, value, start, end)
-        }
-        TensorElementType::Uint16 => {
-            as_byte_slice!(u16, value, start, end)
-        }
-        TensorElementType::Int16 => {
-            as_byte_slice!(i16, value, start, end)
-        }
-        TensorElementType::Int32 => {
-            as_byte_slice!(i32, value, start, end)
-        }
-        TensorElementType::Int64 => {
-            as_byte_slice!(i64, value, start, end)
-        }
-        TensorElementType::Bool => {
-            as_byte_slice!(bool, value, start, end)
-        }
-        TensorElementType::Float64 => {
-            as_byte_slice!(f64, value, start, end)
-        }
-        TensorElementType::Uint32 => {
-            as_byte_slice!(u32, value, start, end)
-        }
-        TensorElementType::Uint64 => {
-            as_byte_slice!(u64, value, start, end)
-        }
-
-        // Unsupported or special handling types
-        TensorElementType::Float16 => todo!(),
-        TensorElementType::Bfloat16 => todo!(),
-        TensorElementType::Complex64 => todo!(),
-        TensorElementType::Complex128 => todo!(),
-        TensorElementType::Float8E4M3FN => todo!(),
-        TensorElementType::Float8E4M3FNUZ => todo!(),
-        TensorElementType::Float8E5M2 => todo!(),
-        TensorElementType::Float8E5M2FNUZ => todo!(),
-        TensorElementType::Uint4 => todo!(),
-        TensorElementType::Int4 => todo!(),
-        TensorElementType::String => todo!(),
-        TensorElementType::Undefined => todo!(),
-        _ => todo!(),
-    }
+pub fn value_as_byte_slice(value: &Value, start: usize, end: usize) -> Result<&[u8], InferError> {
+    let bytes = match value.data_type() {
+        TensorElementType::Float32 => as_byte_slice!(f32, value, start, end),
+        TensorElementType::Uint8 => as_byte_slice!(u8, value, start, end),
+        TensorElementType::Int8 => as_byte_slice!(i8, value, start, end),
+        TensorElementType::Uint16 => as_byte_slice!(u16, value, start, end),
+        TensorElementType::Int16 => as_byte_slice!(i16, value, start, end),
+        TensorElementType::Int32 => as_byte_slice!(i32, value, start, end),
+        TensorElementType::Int64 => as_byte_slice!(i64, value, start, end),
+        TensorElementType::Bool => as_byte_slice!(bool, value, start, end),
+        TensorElementType::Float64 => as_byte_slice!(f64, value, start, end),
+        TensorElementType::Uint32 => as_byte_slice!(u32, value, start, end),
+        TensorElementType::Uint64 => as_byte_slice!(u64, value, start, end),
+        _ => return Err(InferError::UnsupportedDataType),
+    };
+    Ok(bytes)
 }
 
 impl BatchedTensor {
@@ -337,117 +304,81 @@ impl BatchableTensor {
         }
     }
 
-    pub fn copy_at_from_bytes(&mut self, slot: usize, tensor: &[u8]) {
+    pub fn copy_at_from_bytes(&mut self, slot: usize, tensor: &[u8]) -> Result<(), InferError> {
         match self.data_type {
-            TensorElementType::Float32 => {
-                copy_tensor_slice_from_bytes!(
-                    f32,
-                    self.inner_tensor,
-                    self.single_tensor_shape,
-                    tensor,
-                    slot
-                )
-            }
-            TensorElementType::Uint8 => {
-                copy_tensor_slice_from_bytes!(
-                    u8,
-                    self.inner_tensor,
-                    self.single_tensor_shape,
-                    tensor,
-                    slot
-                )
-            }
-            TensorElementType::Int8 => {
-                copy_tensor_slice_from_bytes!(
-                    i8,
-                    self.inner_tensor,
-                    self.single_tensor_shape,
-                    tensor,
-                    slot
-                )
-            }
-            TensorElementType::Uint16 => {
-                copy_tensor_slice_from_bytes!(
-                    u16,
-                    self.inner_tensor,
-                    self.single_tensor_shape,
-                    tensor,
-                    slot
-                )
-            }
-            TensorElementType::Int16 => {
-                copy_tensor_slice_from_bytes!(
-                    i16,
-                    self.inner_tensor,
-                    self.single_tensor_shape,
-                    tensor,
-                    slot
-                )
-            }
-            TensorElementType::Int32 => {
-                copy_tensor_slice_from_bytes!(
-                    i32,
-                    self.inner_tensor,
-                    self.single_tensor_shape,
-                    tensor,
-                    slot
-                )
-            }
-            TensorElementType::Int64 => {
-                copy_tensor_slice_from_bytes!(
-                    i64,
-                    self.inner_tensor,
-                    self.single_tensor_shape,
-                    tensor,
-                    slot
-                )
-            }
-            TensorElementType::Bool => {
-                todo!()
-            }
-            TensorElementType::Float64 => {
-                copy_tensor_slice_from_bytes!(
-                    f64,
-                    self.inner_tensor,
-                    self.single_tensor_shape,
-                    tensor,
-                    slot
-                )
-            }
-            TensorElementType::Uint32 => {
-                copy_tensor_slice_from_bytes!(
-                    u32,
-                    self.inner_tensor,
-                    self.single_tensor_shape,
-                    tensor,
-                    slot
-                )
-            }
-            TensorElementType::Uint64 => {
-                copy_tensor_slice_from_bytes!(
-                    u64,
-                    self.inner_tensor,
-                    self.single_tensor_shape,
-                    tensor,
-                    slot
-                )
-            }
-
-            // Unsupported or special handling types
-            TensorElementType::Float16 => todo!(),
-            TensorElementType::Bfloat16 => todo!(),
-            TensorElementType::Complex64 => todo!(),
-            TensorElementType::Complex128 => todo!(),
-            TensorElementType::Float8E4M3FN => todo!(),
-            TensorElementType::Float8E4M3FNUZ => todo!(),
-            TensorElementType::Float8E5M2 => todo!(),
-            TensorElementType::Float8E5M2FNUZ => todo!(),
-            TensorElementType::Uint4 => todo!(),
-            TensorElementType::Int4 => todo!(),
-            TensorElementType::String => todo!(),
-            TensorElementType::Undefined => todo!(),
-        _ => todo!(),
+            TensorElementType::Float32 => copy_tensor_slice_from_bytes!(
+                f32,
+                self.inner_tensor,
+                self.single_tensor_shape,
+                tensor,
+                slot
+            ),
+            TensorElementType::Uint8 => copy_tensor_slice_from_bytes!(
+                u8,
+                self.inner_tensor,
+                self.single_tensor_shape,
+                tensor,
+                slot
+            ),
+            TensorElementType::Int8 => copy_tensor_slice_from_bytes!(
+                i8,
+                self.inner_tensor,
+                self.single_tensor_shape,
+                tensor,
+                slot
+            ),
+            TensorElementType::Uint16 => copy_tensor_slice_from_bytes!(
+                u16,
+                self.inner_tensor,
+                self.single_tensor_shape,
+                tensor,
+                slot
+            ),
+            TensorElementType::Int16 => copy_tensor_slice_from_bytes!(
+                i16,
+                self.inner_tensor,
+                self.single_tensor_shape,
+                tensor,
+                slot
+            ),
+            TensorElementType::Int32 => copy_tensor_slice_from_bytes!(
+                i32,
+                self.inner_tensor,
+                self.single_tensor_shape,
+                tensor,
+                slot
+            ),
+            TensorElementType::Int64 => copy_tensor_slice_from_bytes!(
+                i64,
+                self.inner_tensor,
+                self.single_tensor_shape,
+                tensor,
+                slot
+            ),
+            TensorElementType::Float64 => copy_tensor_slice_from_bytes!(
+                f64,
+                self.inner_tensor,
+                self.single_tensor_shape,
+                tensor,
+                slot
+            ),
+            TensorElementType::Uint32 => copy_tensor_slice_from_bytes!(
+                u32,
+                self.inner_tensor,
+                self.single_tensor_shape,
+                tensor,
+                slot
+            ),
+            TensorElementType::Uint64 => copy_tensor_slice_from_bytes!(
+                u64,
+                self.inner_tensor,
+                self.single_tensor_shape,
+                tensor,
+                slot
+            ),
+            _ => return Err(InferError::UnsupportedDataType),
         };
+        Ok(())
     }
 
     pub fn copy_at_from_dyntensor(&mut self, slot: usize, tensor: &DynTensor) {
