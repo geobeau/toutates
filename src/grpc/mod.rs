@@ -72,7 +72,7 @@ impl GrpcInferenceService for TritonService {
     ) -> Result<ServerMetadataResponse, Status> {
         debug!("server metadata");
         let reply = ServerMetadataResponse {
-            name: "inference-server".to_string(),
+            name: "toutates".to_string(),
             version: "1.0.0-demo".to_string(),
             extensions: vec!["classification".to_string(), "model_repository".to_string()],
         };

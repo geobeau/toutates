@@ -35,7 +35,7 @@ impl std::fmt::Display for ExecutionProviderKind {
 }
 
 #[derive(Parser)]
-#[command(name = "inference-server")]
+#[command(name = "toutates")]
 pub struct Args {
     // ── Thread pool ──────────────────────────────────────────
     /// Number of compio worker threads for gRPC processing.

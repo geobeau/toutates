@@ -49,16 +49,16 @@ ENV ORT_DYLIB_PATH="/opt/onnxruntime-linux-x64-gpu-1.26.0/lib/libonnxruntime.so"
 ENV LD_LIBRARY_PATH="${ORT_LIB_LOCATION}:${LD_LIBRARY_PATH}"
 
 # Copy project source
-WORKDIR /build/inference-server
+WORKDIR /build/toutates
 COPY . .
 
 # Build the project
 RUN cargo build --release \
-    && cp target/release/inference-server /usr/local/bin/inference-server \
+    && cp target/release/toutates /usr/local/bin/toutates \
     && rm -rf target /root/.cargo/registry /root/.cargo/git
 
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash --uid 1001 appuser
 USER 1001
 
-ENTRYPOINT ["/usr/local/bin/inference-server"]
+ENTRYPOINT ["/usr/local/bin/toutates"]
