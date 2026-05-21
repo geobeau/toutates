@@ -33,9 +33,7 @@ impl OnnxExecutor {
                         .map_err(|e| InferError::SessionRun(Arc::from(e.to_string())))?;
                     let session_outputs = self
                         .session
-                        .run_async(inputs, &run_options)
-                        .map_err(|e| InferError::SessionRun(Arc::from(e.to_string())))?
-                        .await
+                        .run_with_options(inputs, &run_options)
                         .map_err(|e| InferError::SessionRun(Arc::from(e.to_string())))?;
                     with_local_metrics(|m| {
                         m.observe_model_execution(&model_name, start.elapsed().as_secs_f64());

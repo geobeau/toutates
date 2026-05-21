@@ -25,7 +25,7 @@ use ort::{environment::GlobalThreadPoolOptions, execution_providers::{Arbitraril
 use crate::{
     grpc::{inference::GrpcInferenceServiceServer, TritonService},
     model_repository::{LoadedModel, LocalModelRepository, ModelRepository},
-    model_runtime::{LoadModelRequest, ModelRuntimeManager, SessionStarter},
+    model_runtime::{LoadModelRequest, ModelRuntimeManager},
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -243,30 +243,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })];
     let grpc_server = Server::new(services, config, addr.to_string());
 
-    // Create per-executor-core session starter channels
-    let mut starter_txs = Vec::with_capacity(executor_cores);
-    let mut starter_rxs = Vec::with_capacity(executor_cores);
-    for _ in 0..executor_cores {
-        let (tx, rx) = tokio::sync::mpsc::channel(64);
-        starter_txs.push(tx);
-        starter_rxs.push(Some(rx));
-    }
-
     // Spawn the ModelRuntimeManager on its own dedicated thread
     let custom_op_libraries = args.custom_op_libraries.unwrap_or_default();
     let manager_metrics = metrics_registry.clone();
-    let manager = ModelRuntimeManager::new(
-        load_rx,
-        starter_txs,
-        loaded_models,
-        manager_metrics.clone(),
-        custom_op_libraries,
-    );
     let manager_pin_cpu = mgr_exec_pin_pool.map(|cpus| {
         let core = cpus[pin_index % cpus.len()];
         pin_index += 1;
         core
     });
+    // Carve out the executor pin pool now (same CPU slots the old
+    // executor-core threads used). Session threads spawned by the manager
+    // round-robin across this pool; multiple may share a CPU.
+    let executor_pin_pool: Option<Vec<core_affinity::CoreId>> = mgr_exec_pin_pool.map(|cpus| {
+        (0..executor_cores)
+            .map(|i| cpus[(pin_index + i) % cpus.len()])
+            .collect()
+    });
+    pin_index += executor_cores;
+    let manager = ModelRuntimeManager::new(
+        load_rx,
+        executor_pin_pool,
+        loaded_models,
+        manager_metrics.clone(),
+        custom_op_libraries,
+    );
     let manager_handle = std::thread::Builder::new()
         .name("model-manager".into())
         .spawn(move || {
@@ -294,44 +294,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap();
 
     let mut handles = vec![manager_handle];
-
-    // Spawn dedicated executor core threads
-    for core_id in 0..executor_cores {
-        let starter_rx = starter_rxs[core_id].take().unwrap();
-        let metrics_for_executor = metrics_registry.clone();
-        let exec_pin_cpu = mgr_exec_pin_pool.map(|cpus| {
-            let core = cpus[pin_index % cpus.len()];
-            pin_index += 1;
-            core
-        });
-
-        let handle = std::thread::Builder::new()
-            .name(format!("exec-{core_id}"))
-            .spawn(move || {
-                if let Some(core) = exec_pin_cpu {
-                    if !core_affinity::set_for_current(core) {
-                        panic!("Failed to pin exec-{core_id} to CPU {}", core.id);
-                    }
-                    info!("Pinned exec-{core_id} to CPU {}", core.id);
-                }
-                let rt = compio::runtime::RuntimeBuilder::new()
-                    .build()
-                    .expect("failed to build executor compio runtime");
-                rt.block_on(async move {
-                    metrics::init_local_metrics(metrics_for_executor);
-                    compio::runtime::spawn(async {
-                        loop {
-                            compio::time::sleep(std::time::Duration::from_secs(1)).await;
-                            metrics::flush_local_metrics();
-                        }
-                    })
-                    .detach();
-                    SessionStarter::new(starter_rx).run().await;
-                });
-            })
-            .unwrap();
-        handles.push(handle);
-    }
 
     // io_uring registered buffer pool (per-runtime, used by pajamax's read_multi).
     let buffer_pool_size = std::num::NonZero::new(args.buffer_pool_size)

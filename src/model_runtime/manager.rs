@@ -23,7 +23,7 @@ use crate::tensor::supertensor::SuperTensorBuffer;
 
 use tracing::info;
 
-use super::session_starter::SessionStartRequest;
+use super::session_thread::spawn_session_thread;
 
 pub struct LoadModelRequest {
     pub model_name: String,
@@ -38,32 +38,31 @@ pub enum LoadError {
     SessionBuild(String),
     AllocatorCreate(String),
     SuperTensorBuild,
-    DispatchFailed(String),
 }
 
 pub struct ModelRuntimeManager {
     receiver: mpsc::Receiver<LoadModelRequest>,
-    starters: Vec<mpsc::Sender<SessionStartRequest>>,
+    executor_pin_pool: Option<Vec<core_affinity::CoreId>>,
     loaded_models: Arc<ArcSwap<HashMap<String, Arc<ModelProxy>>>>,
     metrics: Arc<MetricsRegistry>,
-    round_robin: AtomicUsize,
+    pin_counter: AtomicUsize,
     custom_op_libraries: Vec<PathBuf>,
 }
 
 impl ModelRuntimeManager {
     pub fn new(
         receiver: mpsc::Receiver<LoadModelRequest>,
-        starters: Vec<mpsc::Sender<SessionStartRequest>>,
+        executor_pin_pool: Option<Vec<core_affinity::CoreId>>,
         loaded_models: Arc<ArcSwap<HashMap<String, Arc<ModelProxy>>>>,
         metrics: Arc<MetricsRegistry>,
         custom_op_libraries: Vec<PathBuf>,
     ) -> Self {
         Self {
             receiver,
-            starters,
+            executor_pin_pool,
             loaded_models,
             metrics,
-            round_robin: AtomicUsize::new(0),
+            pin_counter: AtomicUsize::new(0),
             custom_op_libraries,
         }
     }
@@ -407,22 +406,29 @@ impl ModelRuntimeManager {
             model_proxy.clone(),
         );
 
-        // Dispatch sessions round-robin to executor cores
+        // Spawn one dedicated OS thread per session, pinned round-robin to the
+        // executor CPU pool. Multiple session threads may share a CPU.
         let stop_profiling_after = config
             .profiling
             .as_ref()
             .and_then(|p| p.stop_after_batches);
         for (i, session) in sessions.into_iter().enumerate() {
-            let idx = self.round_robin.fetch_add(1, Ordering::Relaxed) % self.starters.len();
-            self.starters[idx]
-                .send(SessionStartRequest {
-                    executor_id: format!("{}-executor-{i}", &model_name),
-                    session,
-                    model_proxy: model_proxy.clone(),
-                    stop_profiling_after,
-                })
-                .await
-                .map_err(|e| LoadError::DispatchFailed(e.to_string()))?;
+            let pin_cpu = self.executor_pin_pool.as_ref().and_then(|pool| {
+                if pool.is_empty() {
+                    None
+                } else {
+                    let idx = self.pin_counter.fetch_add(1, Ordering::Relaxed) % pool.len();
+                    Some(pool[idx])
+                }
+            });
+            spawn_session_thread(
+                format!("{}-executor-{i}", &model_name),
+                session,
+                model_proxy.clone(),
+                stop_profiling_after,
+                pin_cpu,
+                self.metrics.clone(),
+            );
         }
 
         Ok(())

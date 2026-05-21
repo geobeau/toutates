@@ -1,5 +1,4 @@
 pub mod manager;
-pub mod session_starter;
+pub mod session_thread;
 
 pub use manager::{LoadModelRequest, ModelRuntimeManager};
-pub use session_starter::SessionStarter;
