@@ -123,10 +123,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .load_models
                 .as_ref()
                 .map(|v| v.iter().cloned().collect());
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
+            let rt = compio::runtime::Runtime::new()
+                .expect("failed to build S3 loader compio runtime");
             rt.block_on(repo.load_all(filter.as_ref()))
                 .expect("failed to load models from S3")
         }

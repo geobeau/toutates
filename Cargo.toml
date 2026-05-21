@@ -15,7 +15,7 @@ ort = { git = "https://github.com/pykeio/ort", rev = "76849504481c06c872c0b9450d
 ort-sys = { git = "https://github.com/pykeio/ort", rev = "76849504481c06c872c0b9450d39e8b9975c9b8e", default-features = false }
 rand = "0.9.1"
 futures = "0.3.31"
-fusio = { version = "0.6", features = ["tokio-http", "aws"] }
+fusio = { path = "../fusio/fusio", default-features = false, features = ["compio-http", "aws", "dyn", "executor"] }
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
 # GRPC Stuff
