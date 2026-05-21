@@ -22,11 +22,9 @@ pub struct MetricsRegistry {
     pub inference_requests_inference_exec_end: HistogramVec,
     pub inference_requests_output_processed: HistogramVec,
 
-    pub inference_queue_depth: IntGauge,
+    pub inference_inflight: IntGaugeVec,
+    pub inference_capacity: IntGaugeVec,
     pub inference_executors_in_use: IntGaugeVec,
-    pub inference_ring_tail_index: IntGaugeVec,
-    pub inference_ring_in_use_index: IntGaugeVec,
-    pub inference_ring_head_index: IntGaugeVec,
     pub inference_configured_batch_size: IntGaugeVec,
     pub loaded_models: IntGauge,
 }
@@ -197,13 +195,28 @@ impl MetricsRegistry {
             .register(Box::new(inference_requests_output_processed.clone()))
             .unwrap();
 
-        let inference_queue_depth = IntGauge::new(
-            "inference_queue_depth",
-            "Current depth of the inference queue",
+        let inference_inflight = IntGaugeVec::new(
+            Opts::new(
+                "inference_inflight",
+                "Total slots in the pipeline (queued + executing)",
+            ),
+            &["model"],
         )
         .unwrap();
         registry
-            .register(Box::new(inference_queue_depth.clone()))
+            .register(Box::new(inference_inflight.clone()))
+            .unwrap();
+
+        let inference_capacity = IntGaugeVec::new(
+            Opts::new(
+                "inference_capacity",
+                "Total ring buffer capacity (batch_size * num_batches)",
+            ),
+            &["model"],
+        )
+        .unwrap();
+        registry
+            .register(Box::new(inference_capacity.clone()))
             .unwrap();
 
         let inference_executors_in_use = IntGaugeVec::new(
@@ -216,42 +229,6 @@ impl MetricsRegistry {
         .unwrap();
         registry
             .register(Box::new(inference_executors_in_use.clone()))
-            .unwrap();
-
-        let inference_ring_tail_index = IntGaugeVec::new(
-            Opts::new(
-                "inference_ring_tail_index",
-                "Current ring buffer tail index",
-            ),
-            &["model"],
-        )
-        .unwrap();
-        registry
-            .register(Box::new(inference_ring_tail_index.clone()))
-            .unwrap();
-
-        let inference_ring_in_use_index = IntGaugeVec::new(
-            Opts::new(
-                "inference_ring_in_use_index",
-                "Current ring buffer in-use index",
-            ),
-            &["model"],
-        )
-        .unwrap();
-        registry
-            .register(Box::new(inference_ring_in_use_index.clone()))
-            .unwrap();
-
-        let inference_ring_head_index = IntGaugeVec::new(
-            Opts::new(
-                "inference_ring_head_index",
-                "Current ring buffer head index",
-            ),
-            &["model"],
-        )
-        .unwrap();
-        registry
-            .register(Box::new(inference_ring_head_index.clone()))
             .unwrap();
 
         let inference_configured_batch_size = IntGaugeVec::new(
@@ -285,11 +262,9 @@ impl MetricsRegistry {
             inference_requests_inference_exec_start,
             inference_requests_inference_exec_end,
             inference_requests_output_processed,
-            inference_queue_depth,
+            inference_inflight,
+            inference_capacity,
             inference_executors_in_use,
-            inference_ring_tail_index,
-            inference_ring_in_use_index,
-            inference_ring_head_index,
             inference_configured_batch_size,
             loaded_models,
         }

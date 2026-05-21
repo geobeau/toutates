@@ -61,9 +61,8 @@ impl Drop for ExecutorsInUseGuard<'_> {
 }
 
 pub struct SuperTensorMetricsSnapshot {
-    pub tail_index: usize,
-    pub in_use_index: usize,
-    pub head_index: usize,
+    pub inflight: usize,
+    pub capacity: usize,
     pub executors_in_use: usize,
 }
 
@@ -686,13 +685,14 @@ impl SuperTensorBuffer {
     }
 
     pub fn metrics_snapshot(&self) -> SuperTensorMetricsSnapshot {
+        let tail = self.tail.load(Ordering::Acquire).as_absolute_index();
+        let head = self.head.load(Ordering::Acquire).as_absolute_index();
+        let total_capacity = self.capacity * self.batch_size;
+        // Total slots in the pipeline (queued + executing).
+        let inflight = head.saturating_sub(tail).min(total_capacity);
         SuperTensorMetricsSnapshot {
-            tail_index: self.tail.load(Ordering::Acquire).as_absolute_index(),
-            in_use_index: self
-                .executor_head
-                .load(Ordering::Acquire)
-                .as_absolute_index(),
-            head_index: self.head.load(Ordering::Acquire).as_absolute_index(),
+            inflight,
+            capacity: total_capacity,
             executors_in_use: self.executors_in_use.load(Ordering::Acquire),
         }
     }

@@ -83,26 +83,22 @@ impl ModelRuntimeManager {
         model_proxy: Arc<ModelProxy>,
     ) {
         compio::runtime::spawn(async move {
+            let inflight = metrics
+                .inference_inflight
+                .with_label_values(&[model_name.as_str()]);
+            let capacity = metrics
+                .inference_capacity
+                .with_label_values(&[model_name.as_str()]);
             let executors_in_use = metrics
                 .inference_executors_in_use
-                .with_label_values(&[model_name.as_str()]);
-            let ring_tail_index = metrics
-                .inference_ring_tail_index
-                .with_label_values(&[model_name.as_str()]);
-            let ring_in_use_index = metrics
-                .inference_ring_in_use_index
-                .with_label_values(&[model_name.as_str()]);
-            let ring_head_index = metrics
-                .inference_ring_head_index
                 .with_label_values(&[model_name.as_str()]);
             let to_i64 = |value: usize| i64::try_from(value).unwrap_or(i64::MAX);
 
             loop {
                 let snapshot = model_proxy.data.metrics_snapshot();
+                inflight.set(to_i64(snapshot.inflight));
+                capacity.set(to_i64(snapshot.capacity));
                 executors_in_use.set(to_i64(snapshot.executors_in_use));
-                ring_tail_index.set(to_i64(snapshot.tail_index));
-                ring_in_use_index.set(to_i64(snapshot.in_use_index));
-                ring_head_index.set(to_i64(snapshot.head_index));
 
                 compio::time::sleep(Duration::from_secs(1)).await;
             }
