@@ -17,6 +17,7 @@ RUN apt-get update && apt-get install -y \
     gdb \
     linux-tools-generic \
     locales \
+    libmimalloc-dev \
     && locale-gen en_US.UTF-8 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -60,5 +61,7 @@ RUN cargo build --release \
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash --uid 1001 appuser
 USER 1001
+
+ENV LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libmimalloc.so
 
 ENTRYPOINT ["/usr/local/bin/toutates"]
