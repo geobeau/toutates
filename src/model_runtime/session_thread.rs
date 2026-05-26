@@ -5,6 +5,7 @@ use ort::session::Session;
 
 use crate::loader::OnnxExecutor;
 use crate::metrics::{flush_local_metrics, init_local_metrics, MetricsRegistry};
+use crate::model_runtime::gpu_binding::{GpuBoundIo};
 use crate::scheduler::ModelProxy;
 
 use tracing::info;
@@ -16,6 +17,7 @@ pub fn spawn_session_thread(
     stop_profiling_after: Option<u64>,
     pin_cpu: Option<core_affinity::CoreId>,
     metrics: Arc<MetricsRegistry>,
+    gpu_io: Option<GpuBoundIo>,
 ) {
     let thread_name = executor_id.clone();
     std::thread::Builder::new()
@@ -53,6 +55,7 @@ pub fn spawn_session_thread(
                     session,
                     model: model_proxy,
                     stop_profiling_after,
+                    gpu_io,
                 };
                 executor.run().await;
             });

@@ -12,6 +12,7 @@ pub enum Backend {
 pub enum AllocatorKind {
     Cpu,
     CudaPinned,
+    Cuda,
 }
 
 #[derive(Debug, Clone, Deserialize)]

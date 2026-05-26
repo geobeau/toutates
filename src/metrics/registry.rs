@@ -14,6 +14,9 @@ pub struct MetricsRegistry {
     pub inference_request_duration_seconds: HistogramVec,
     pub inference_batch_duration_seconds: HistogramVec,
     pub inference_model_execution_seconds: HistogramVec,
+    pub inference_model_session_run_seconds: HistogramVec,
+    pub inference_model_h2d_copy_seconds: HistogramVec,
+    pub inference_model_d2h_copy_seconds: HistogramVec,
 
     pub inference_requests_model_proxy_aquired: HistogramVec,
     pub inference_requests_serialization_done: HistogramVec,
@@ -121,6 +124,42 @@ impl MetricsRegistry {
         .unwrap();
         registry
             .register(Box::new(inference_model_execution_seconds.clone()))
+            .unwrap();
+
+        let inference_model_session_run_seconds = HistogramVec::new(
+            make_histogram_opts(
+                "inference_model_session_run_seconds",
+                "Duration of the ORT session run call only (excludes H2D/D2H copies) in seconds",
+            ),
+            &["model"],
+        )
+        .unwrap();
+        registry
+            .register(Box::new(inference_model_session_run_seconds.clone()))
+            .unwrap();
+
+        let inference_model_h2d_copy_seconds = HistogramVec::new(
+            make_histogram_opts(
+                "inference_model_h2d_copy_seconds",
+                "Duration of host-to-device input copy for GPU-bound executors in seconds",
+            ),
+            &["model"],
+        )
+        .unwrap();
+        registry
+            .register(Box::new(inference_model_h2d_copy_seconds.clone()))
+            .unwrap();
+
+        let inference_model_d2h_copy_seconds = HistogramVec::new(
+            make_histogram_opts(
+                "inference_model_d2h_copy_seconds",
+                "Duration of device-to-host output copy for GPU-bound executors in seconds",
+            ),
+            &["model"],
+        )
+        .unwrap();
+        registry
+            .register(Box::new(inference_model_d2h_copy_seconds.clone()))
             .unwrap();
 
         let inference_requests_model_proxy_aquired = HistogramVec::new(
@@ -256,6 +295,9 @@ impl MetricsRegistry {
             inference_request_duration_seconds,
             inference_batch_duration_seconds,
             inference_model_execution_seconds,
+            inference_model_session_run_seconds,
+            inference_model_h2d_copy_seconds,
+            inference_model_d2h_copy_seconds,
             inference_requests_model_proxy_aquired,
             inference_requests_serialization_done,
             inference_requests_inference_in_queue,

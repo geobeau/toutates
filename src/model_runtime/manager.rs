@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use ort::memory::{AllocationDevice, Allocator, AllocatorType, MemoryInfo, MemoryType};
+use ort::logging::LogLevel;
 use ort::session::builder::GraphOptimizationLevel;
 use ort::session::{RunOptions, Session};
 use smallvec::SmallVec;
@@ -21,8 +22,10 @@ use crate::model_repository::config::{AllocatorKind, ModelRepositoryConfig};
 use crate::scheduler::{ModelInputMetadata, ModelMetadata, ModelProxy};
 use crate::tensor::supertensor::SuperTensorBuffer;
 
+use ort::value::Shape;
 use tracing::info;
 
+use super::gpu_binding::{GpuBoundIo, GpuBoundIoSpec};
 use super::session_thread::spawn_session_thread;
 
 pub struct LoadModelRequest {
@@ -122,7 +125,10 @@ impl ModelRuntimeManager {
             let mut builder = Session::builder()
                 .map_err(|e| LoadError::SessionBuild(e.to_string()))?
                 .with_optimization_level(GraphOptimizationLevel::Level3)
+                .map_err(|e| LoadError::SessionBuild(e.to_string()))?
+                .with_log_level(LogLevel::Verbose)
                 .map_err(|e| LoadError::SessionBuild(e.to_string()))?;
+
 
             if let Some(profiling) = &config.profiling {
                 builder = builder
@@ -146,13 +152,13 @@ impl ModelRuntimeManager {
         // Build SuperTensorBuffer and metadata from the first session
         let first_session = &sessions[0];
 
-        let alloc_device = match config.allocator {
-            AllocatorKind::Cpu => AllocationDevice::CPU,
-            AllocatorKind::CudaPinned => AllocationDevice::CUDA_PINNED,
-        };
-        let memory_type = match config.allocator {
-            AllocatorKind::Cpu => MemoryType::CPUInput,
-            AllocatorKind::CudaPinned => MemoryType::CPUInput,
+        let (alloc_device, memory_type) = match config.allocator {
+            AllocatorKind::Cpu => (AllocationDevice::CPU, MemoryType::CPUInput),
+            AllocatorKind::CudaPinned => (AllocationDevice::CUDA_PINNED, MemoryType::CPUInput),
+            // When the user picks the GPU-bound execution path, the supertensor
+            // host buffers go through pinned memory so the per-iteration H2D
+            // copy into the bound device tensors is fast.
+            AllocatorKind::Cuda => (AllocationDevice::CUDA_PINNED, MemoryType::CPUInput),
         };
 
         let allocator = Allocator::new(
@@ -365,26 +371,40 @@ impl ModelRuntimeManager {
             model_metadata,
         });
 
-        // Warmup each session before making the model available
+        // Build GPU IO spec before warmup so warmup can exercise the same
+        // IO-binding path that the session threads use at inference time.
+        let gpu_spec = match config.allocator {
+            AllocatorKind::Cuda => Some(Arc::new(build_gpu_bound_spec(
+                &sessions[0],
+                batch_size,
+                &config.input_shapes,
+                &config.output_shapes,
+            )?)),
+            _ => None,
+        };
+
+        // Warmup each session before making the model available.
+        let mut warmed_gpu_ios: Vec<Option<GpuBoundIo>> = Vec::with_capacity(sessions.len());
         for (i, session) in sessions.iter_mut().enumerate() {
             info!(%model_name, executor = i, "warming up session");
-            model_proxy
-                .data
-                .warmup(async |inputs| {
-                    let run_options = RunOptions::new().unwrap();
-                    let session_outputs = session
-                        .run_async(inputs, &run_options)
-                        .unwrap()
-                        .await
-                        .unwrap();
-                    let mut values: SmallVec<[ort::value::Value; 4]> =
-                        SmallVec::with_capacity(session_outputs.len());
-                    session_outputs.into_iter().for_each(|(_, value)| {
-                        values.push(value);
-                    });
-                    SessionValues { values }
-                })
-                .await;
+            let mut gpu_io = gpu_spec.as_ref().map(|spec| {
+                GpuBoundIo::new(session, spec).expect("failed to build GpuBoundIo for warmup")
+            });
+            // onnxruntime needs more than 1 run to finish all optimizations
+            for warmup_iter in 0..3 {
+                model_proxy
+                    .data
+                    .warmup(async |inputs| {
+                        let session_values = match gpu_io.as_mut() {
+                            Some(gio) => crate::loader::run_gpu_bound(session, gio, inputs, &model_name).unwrap(),
+                            None => crate::loader::run_host(session, inputs, &model_name).unwrap(),
+                        };
+                        session_values
+                    })
+                    .await;
+                info!(%model_name, executor = i, iter = warmup_iter, "warmup iter done");
+            }
+            warmed_gpu_ios.push(gpu_io);
         }
         info!(%model_name, "all sessions warmed up");
 
@@ -412,6 +432,7 @@ impl ModelRuntimeManager {
             .profiling
             .as_ref()
             .and_then(|p| p.stop_after_batches);
+
         for (i, session) in sessions.into_iter().enumerate() {
             let pin_cpu = self.executor_pin_pool.as_ref().and_then(|pool| {
                 if pool.is_empty() {
@@ -428,9 +449,70 @@ impl ModelRuntimeManager {
                 stop_profiling_after,
                 pin_cpu,
                 self.metrics.clone(),
+                warmed_gpu_ios[i].take(),
             );
         }
 
         Ok(())
     }
+}
+
+fn build_gpu_bound_spec(
+    session: &Session,
+    batch_size: usize,
+    input_shapes: &std::collections::HashMap<String, Vec<i64>>,
+    output_shapes: &std::collections::HashMap<String, Vec<i64>>,
+) -> Result<GpuBoundIoSpec, LoadError> {
+    let mut inputs = SmallVec::new();
+    for input in session.inputs().iter() {
+        let name = input.name().to_string();
+        let dtype = input
+            .dtype()
+            .tensor_type()
+            .ok_or(LoadError::SuperTensorBuild)?;
+        // Match the existing input-override behavior: a user-supplied shape
+        // fully replaces the model shape (see load_model above).
+        let mut dims: Vec<i64> = if let Some(override_shape) = input_shapes.get(&name) {
+            override_shape.clone()
+        } else {
+            input
+                .dtype()
+                .tensor_shape()
+                .ok_or(LoadError::SuperTensorBuild)?
+                .iter()
+                .cloned()
+                .collect()
+        };
+        dims[0] = batch_size as i64;
+        inputs.push((name, dtype, Shape::from(dims)));
+    }
+
+    let mut outputs = SmallVec::new();
+    for output in session.outputs().iter() {
+        let name = output.name().to_string();
+        let dtype = output
+            .dtype()
+            .tensor_type()
+            .ok_or(LoadError::SuperTensorBuild)?;
+        // Match the existing output-override behavior: only the specified dims
+        // are replaced (merge semantics).
+        let mut dims: Vec<i64> = output
+            .dtype()
+            .tensor_shape()
+            .ok_or(LoadError::SuperTensorBuild)?
+            .iter()
+            .cloned()
+            .collect();
+        if let Some(override_shape) = output_shapes.get(&name) {
+            for (i, d) in override_shape.iter().enumerate() {
+                if i < dims.len() {
+                    dims[i] = *d;
+                }
+            }
+        }
+        dims[0] = batch_size as i64;
+        outputs.push((name, dtype, Shape::from(dims)));
+    }
+
+    Ok(GpuBoundIoSpec { inputs, outputs })
 }

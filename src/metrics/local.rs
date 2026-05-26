@@ -43,6 +43,9 @@ struct LocalModelMetrics {
     batch_items: LocalHistogram,
     client_batch_size: LocalHistogram,
     model_execution: LocalHistogram,
+    model_session_run: LocalHistogram,
+    model_h2d_copy: LocalHistogram,
+    model_d2h_copy: LocalHistogram,
     model_proxy_aquired: LocalHistogram,
     serialization_done: LocalHistogram,
     inference_in_queue: LocalHistogram,
@@ -101,6 +104,18 @@ impl LocalMetrics {
                         .local(),
                     model_execution: r
                         .inference_model_execution_seconds
+                        .with_label_values(&[model])
+                        .local(),
+                    model_session_run: r
+                        .inference_model_session_run_seconds
+                        .with_label_values(&[model])
+                        .local(),
+                    model_h2d_copy: r
+                        .inference_model_h2d_copy_seconds
+                        .with_label_values(&[model])
+                        .local(),
+                    model_d2h_copy: r
+                        .inference_model_d2h_copy_seconds
                         .with_label_values(&[model])
                         .local(),
                     model_proxy_aquired: r
@@ -185,6 +200,27 @@ impl LocalMetrics {
             .observe(duration);
     }
 
+    pub fn observe_model_session_run(&self, model: &str, duration: f64) {
+        self.ensure_model(model);
+        self.per_model.borrow()[model]
+            .model_session_run
+            .observe(duration);
+    }
+
+    pub fn observe_model_h2d_copy(&self, model: &str, duration: f64) {
+        self.ensure_model(model);
+        self.per_model.borrow()[model]
+            .model_h2d_copy
+            .observe(duration);
+    }
+
+    pub fn observe_model_d2h_copy(&self, model: &str, duration: f64) {
+        self.ensure_model(model);
+        self.per_model.borrow()[model]
+            .model_d2h_copy
+            .observe(duration);
+    }
+
     pub fn observe_serialization_done(&self, model: &str, duration: f64) {
         self.ensure_model(model);
         self.per_model.borrow()[model]
@@ -230,6 +266,9 @@ impl LocalMetrics {
             m.batch_items.flush();
             m.client_batch_size.flush();
             m.model_execution.flush();
+            m.model_session_run.flush();
+            m.model_h2d_copy.flush();
+            m.model_d2h_copy.flush();
             m.model_proxy_aquired.flush();
             m.serialization_done.flush();
             m.inference_in_queue.flush();
